@@ -630,7 +630,7 @@ let projects = [];
 const curProject = () => projects.find(p => p.id === project) || null;
 async function loadProjects(){
   projects = (await (await fetch("/api/projects")).json()).items;
-  if (project && !curProject()) { project = ""; store.set("project", ""); }
+  if (project && !curProject()) { project = ""; store.set("project", ""); loadHistory(); }   // 記住的專案已被刪除
   const box = $("#projs"); box.innerHTML = "";
   box.appendChild(Object.assign(listItem("💬 一般對話", !project, []), {onclick: () => switchProject("")}));
   for (const p of projects){
