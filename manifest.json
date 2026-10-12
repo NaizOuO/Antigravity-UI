@@ -1,13 +1,15 @@
 {
- "version": "1.1.0",
+ "version": "1.2.0",
  "files": {
-  "server.py": "1d8b7143ebeb8eb4f407a3124956466b4356d90f884ba905bef3f10338beca77",
-  "version.py": "6af50ddba7c2f58d393ebb3c2a3582bcae900b9c3f1619ec74ce0ce2602638bb",
+  "server.py": "9bd44a7bf66bad5552d5307fa47a3b8e55df29aa0d273f044f5b5f7db119c762",
+  "version.py": "24894984286d1e44355ed6eb4e3e39fef610ac34b93d2fa2de1f685de105cd8d",
   "updater.py": "897f802aa96890c04b62137efe0b3c34716f9f91d123360527c3fa8c763634e4",
-  "static/index.html": "072c395039e06c88b7abe7e7af430d225b8857e49b1c429e8acb4dd6aeb5d910",
+  "static/index.html": "6ae032c80c374bbc21ef097f58c0a0e1c93b79e120c4a5886eb5366577e90cc7",
+  "static/icon.png": "7c66719fe91b5c63ee1905c285b19bfd8314a2d5594a669a095c48dc1f84f291",
+  "static/icon.ico": "35f6f56ccaaa0955ee91685e470fda30a78c364fac9e9d00cb93b681f9ecb903",
   "啟動.vbs": "cfba1fed990ffddff8b9aa9a7992f555fbd94acea9c47483d46999628c846c08",
   "關閉.bat": "ea4b8cd327708555cc6fed749536281bf213504f6008afe824b35d307fc54ac9",
   "打包分享.bat": "b8380a11428ec0082442e0d5542b3bc8f3f22a42316eafdaaecde64a4a37884c",
-  "README.md": "8941f28eedc7431619ca149d301d26c2ef0a5dded6ab5921732aad90acd242f6"
+  "README.md": "3bc593da63d6ce6f76f0633d88f4d310dbb388fb4934f9ce4fb3135dab79ea4f"
  }
 }

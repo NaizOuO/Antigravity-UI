@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Antigravity 介面</title>
+<link rel="icon" type="image/png" href="/icon.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
@@ -30,7 +31,12 @@ button,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 /* sidebar */
 #side{width:250px;background:var(--side);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
-#side .top{padding:12px}
+#side .top{padding:4px 12px 12px}
+#brand{display:flex;align-items:center;gap:8px;padding:14px 16px 6px}
+#brand img{width:24px;height:24px;border-radius:6px}
+#brand b{font-size:15px;letter-spacing:.01em}
+#brand .vbadge{margin-left:auto;font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:0 7px;cursor:pointer;background:none}
+#brand .vbadge.new{color:#fff;background:#FF7A45;border-color:#FF7A45}
 #newBtn{width:100%;padding:9px;border:1px solid var(--border);background:var(--panel);border-radius:8px}
 #newBtn:hover{border-color:var(--accent)}
 #hist{flex:1;overflow:auto;padding:0 8px 12px}
@@ -159,12 +165,13 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
 </head>
 <body>
 <aside id="side">
+  <div id="brand"><img src="/icon.png" alt=""><b>Antigravity UI</b><button class="vbadge" id="verBadge" title="檢查更新"></button></div>
   <div class="top"><button id="newBtn">＋ 新對話</button></div>
   <div class="sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
   <div id="projs"></div>
   <div class="sect"><span id="histLabel">對話</span></div>
   <div id="hist"></div>
-  <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a></div>
+  <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a> · <a href="#" id="shortcutLink">建立桌面捷徑</a></div>
 </aside>
 <main id="main">
   <div id="bar">
@@ -225,6 +232,11 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
     <button id="pUpload">＋ 上傳檔案</button>
     <span><button id="pClose">取消</button> <button id="pSave">儲存</button></span>
   </div>
+</dialog>
+<dialog id="scdlg">
+  <h3 style="margin-top:0">建立桌面捷徑</h3>
+  <p>要在桌面建立「Antigravity UI」的捷徑嗎？之後雙擊捷徑就能開啟介面，更新後也會沿用同一個捷徑。</p>
+  <div class="r"><button id="scNo">不用</button><button id="scYes">建立</button></div>
 </dialog>
 <dialog id="updlg">
   <h3 style="margin-top:0" id="updTitle">有新版本</h3>
@@ -754,11 +766,17 @@ async function checkUpdate(force){
   try {
     const v = await (await fetch("/api/version")).json();
     $("#verText").textContent = "v" + v.version;
+    $("#verBadge").textContent = "v" + v.version;
+    document.title = `Antigravity 介面 v${v.version}`;
     updInfo = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
   } catch { return; }
   const b = $("#updBtn");
   b.hidden = !updInfo.available;
   if (updInfo.available) b.textContent = `⬆ 有新版本 v${updInfo.latest}`;
+  // 左上角版本號：有新版時變橘色並顯示「目前 → 最新」
+  $("#verBadge").classList.toggle("new", !!updInfo.available);
+  $("#verBadge").textContent = updInfo.available ? `v${updInfo.current} → v${updInfo.latest}` : `v${updInfo.current}`;
+  $("#verBadge").title = updInfo.available ? "有新版本，點這裡更新" : "檢查更新";
   if (force){
     if (updInfo.available) openUpdateDialog();
     else alert(updInfo.error || `已經是最新版（v${updInfo.current}）。`);
@@ -772,6 +790,24 @@ function openUpdateDialog(){
 }
 $("#updBtn").onclick = openUpdateDialog;
 $("#checkUpd").onclick = e => { e.preventDefault(); checkUpdate(true); };
+$("#verBadge").onclick = () => updInfo?.available ? openUpdateDialog() : checkUpdate(true);
+
+/* ---------- 桌面捷徑 ---------- */
+async function createShortcut(){
+  const r = await post("/api/shortcut/create", {});
+  alert(r.ok ? `已在桌面建立捷徑：\n${r.path}` : r.message);
+  paintShortcutLink(r.ok);
+}
+function paintShortcutLink(exists){ $("#shortcutLink").textContent = exists ? "重新建立捷徑" : "建立桌面捷徑"; }
+async function checkShortcut(){
+  let s; try { s = await (await fetch("/api/shortcut")).json(); } catch { return; }
+  paintShortcutLink(s.exists);
+  if (!s.exists && s.prompt) $("#scdlg").showModal();   // 第一次開啟：詢問要不要建立
+}
+const noMorePrompt = () => post("/api/settings", {shortcut_prompt:false});
+$("#scYes").onclick = async () => { $("#scdlg").close(); await noMorePrompt(); createShortcut(); };
+$("#scNo").onclick = () => { $("#scdlg").close(); noMorePrompt(); };
+$("#shortcutLink").onclick = e => { e.preventDefault(); createShortcut(); };
 $("#updLater").onclick = () => $("#updlg").close();
 $("#updGo").onclick = async () => {
   if (running){ alert("還有回覆在生成中，等它完成再更新。"); return; }
@@ -847,7 +883,7 @@ $("#toggleSide").onclick = () => $("#side").classList.toggle("open");
 
 loadModels().then(refreshUsage);
 loadProjects().then(() => { if (!convId && $("#empty")) $("#list").innerHTML = emptyState(); });
-loadHistory(); checkUpdate(false); $("#input").focus();
+loadHistory(); checkUpdate(false); checkShortcut(); $("#input").focus();
 </script>
 </body>
 </html>

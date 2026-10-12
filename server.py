@@ -23,7 +23,7 @@ import version
 
 BOOT_ID = uuid.uuid4().hex[:8]     # 每次啟動不同；網頁用它判斷伺服器是否已經重啟
 
-HOST, PORT = "127.0.0.1", 8765
+HOST, PORT = "127.0.0.1", int(os.environ.get("AGUI_PORT") or 8765)   # AGUI_PORT：開發測試用
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 DATA = ROOT / "data"               # 所有個人資料都在這裡，分享時不要附上
@@ -42,7 +42,45 @@ if sys.stderr is None or sys.stdout is None:
 
 DEFAULT_SETTINGS = {
     "instructions": "請用繁體中文回答。數學式請用 LaTeX（行內 $...$，獨立式 $$...$$）。",
+    "shortcut_prompt": True,      # 第一次開啟時詢問要不要建立桌面捷徑；回答過就不再問
 }
+
+# ---------- 桌面捷徑 ----------
+SHORTCUT_NAME = "Antigravity UI.lnk"
+
+
+def desktop_dir():
+    """真正的桌面位置（桌面被 OneDrive 接管時會在 OneDrive 裡）。"""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf)   # CSIDL_DESKTOPDIRECTORY
+        if buf.value:
+            return Path(buf.value)
+    except Exception:
+        pass
+    return Path.home() / "Desktop"
+
+
+def create_shortcut():
+    """在桌面建立「Antigravity UI」捷徑：用 wscript 執行 啟動.vbs，圖示用 static/icon.ico。已存在就覆蓋（例如資料夾搬過）。"""
+    script = ("$ws = New-Object -ComObject WScript.Shell; "
+              "$s = $ws.CreateShortcut($env:AGUI_LNK); "
+              "$s.TargetPath = Join-Path $env:WINDIR 'System32\\wscript.exe'; "
+              "$s.Arguments = '\"' + $env:AGUI_VBS + '\"'; "
+              "$s.WorkingDirectory = $env:AGUI_DIR; "
+              "$s.IconLocation = $env:AGUI_ICO + ',0'; "
+              "$s.Description = 'Antigravity UI'; "
+              "$s.Save()")
+    lnk = desktop_dir() / SHORTCUT_NAME
+    env = dict(os.environ, AGUI_LNK=str(lnk), AGUI_VBS=str(ROOT / "啟動.vbs"),
+               AGUI_DIR=str(ROOT), AGUI_ICO=str(STATIC / "icon.ico"))
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], env=env,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=NO_WINDOW, timeout=30)
+    if r.returncode != 0 or not lnk.exists():
+        raise RuntimeError((r.stderr or r.stdout or "未知的錯誤").strip()[:300])
+    return lnk
 SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並在最後列出參考來源網址。]"
 
 
@@ -424,6 +462,12 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path in ("/", "/index.html"):
             return self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
+        if u.path in ("/icon.png", "/icon.ico", "/favicon.ico"):
+            name = "icon.png" if u.path == "/icon.png" else "icon.ico"
+            return self.send_file(STATIC / name, "image/png" if name.endswith(".png") else "image/x-icon")
+        if u.path == "/api/shortcut":
+            return self.send_json({"exists": (desktop_dir() / SHORTCUT_NAME).exists(),
+                                   "prompt": bool(load_settings().get("shortcut_prompt", True))})
         if u.path == "/api/models":
             if not agy_installed():
                 return self.send_json({"models": [], "error": AGY_MISSING})
@@ -529,6 +573,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat(self.body())
         if u.path == "/api/update/install":
             return self.install_update()
+        if u.path == "/api/shortcut/create":
+            try:
+                lnk = create_shortcut()
+                return self.send_json({"ok": True, "path": str(lnk)})
+            except Exception as e:
+                return self.send_json({"ok": False, "message": f"建立捷徑失敗：{e}"})
         self.send_json({"error": "not found"}, 404)
 
     def install_update(self):

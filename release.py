@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
-PROGRAM_FILES = ["server.py", "version.py", "updater.py", "static/index.html",
+PROGRAM_FILES = ["server.py", "version.py", "updater.py", "static/index.html", "static/icon.png", "static/icon.ico",
                  "啟動.vbs", "關閉.bat", "打包分享.bat", "README.md"]
 
 
