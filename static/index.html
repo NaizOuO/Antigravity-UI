@@ -504,6 +504,7 @@ async function runTurn(text, files, fork){
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
+          if (ev.model_gone){ a.meta.textContent = ""; loadModels(true); }   // 模型被拿掉：重抓清單，自動改選可用的模型
         }
       }
     }
@@ -608,10 +609,10 @@ function setModel(id){
   $("#family").value = fam.key; fillEffort(fam, id); paintUsage();
   return true;
 }
-async function loadModels(){
+async function loadModels(refresh = true){
   const sel = $("#family");
   try {
-    const j = await (await fetch("/api/models")).json();
+    const j = await (await fetch("/api/models" + (refresh ? "?refresh=1" : ""))).json();
     $("#banner").hidden = !j.error; $("#banner").textContent = j.error ? "⚠ " + j.error : "";
     families = groupModels(j.models);
     sel.innerHTML = "";

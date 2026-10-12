@@ -124,8 +124,9 @@ def agy_installed():
     return Path(agy_exe()).exists() or shutil.which("agy") is not None
 
 
-def list_models():
-    if MODELS_CACHE["data"] and time.time() - MODELS_CACHE["t"] < 600:
+def list_models(refresh=False):
+    # agy 自動更新後可用模型可能會變（例如 Gemini 3.1 Pro 被拿掉），所以快取只留 2 分鐘，開頁面時也會強制重抓
+    if not refresh and MODELS_CACHE["data"] and time.time() - MODELS_CACHE["t"] < 120:
         return MODELS_CACHE["data"]
     out = subprocess.run([agy_exe(), "models"], capture_output=True, text=True,
                          encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
@@ -135,9 +136,45 @@ def list_models():
         if "\t" in line:
             mid, name = line.split("\t", 1)
             models.append({"id": mid.strip(), "name": name.strip()})
-    if models:
-        MODELS_CACHE.update(t=time.time(), data=models)
+    if not models:
+        return models
+    # 官方清單沒列出、但其實還能用的模型（例如 agy 1.3.3 起清單裡沒有 Gemini 3.1 Pro，指定時照樣能用）：
+    # 記住看過的模型，沒列出的也照樣提供，名稱標「（未列出）」；真的不能用時 forget_model 會把它拿掉
+    seen = load_seen_models()
+    listed = {m["id"] for m in models}
+    seen.update({m["id"]: m["name"] for m in models})
+    save_seen_models(seen)
+    for mid, name in seen.items():
+        if mid not in listed and name and time.time() - MODEL_FAILED.get(mid, 0) > FAILED_HIDE:
+            base, level = re.match(r"^(.*?)(\s*\((?:Low|Medium|High)\))?$", name).groups()
+            models.append({"id": mid, "name": f"{base}（未列出）{level or ''}", "unlisted": True})
+    MODELS_CACHE.update(t=time.time(), data=models)
     return models
+
+
+SEEN_MODELS = DATA / "models_seen.json"
+KNOWN_HIDDEN = {"gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",     # 實測可用但官方清單沒列出
+                "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)"}
+
+
+def load_seen_models():
+    try:
+        return {**KNOWN_HIDDEN, **json.loads(SEEN_MODELS.read_text(encoding="utf-8"))}
+    except (OSError, ValueError):
+        return dict(KNOWN_HIDDEN)
+
+
+def save_seen_models(seen):
+    SEEN_MODELS.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+MODEL_FAILED = {}           # 模型 id -> 失敗時間；未列出的模型失敗後先隱藏一段時間（可能只是 agy 正在更新）
+FAILED_HIDE = 3600
+
+
+def forget_model(mid):
+    MODEL_FAILED[mid] = time.time()
+    MODELS_CACHE.update(t=0, data=None)
 
 
 def safe_name(name):
@@ -593,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
             if not agy_installed():
                 return self.send_json({"models": [], "error": AGY_MISSING})
             try:
-                models = list_models()
+                models = list_models(refresh=q.get("refresh", ["0"])[0] == "1")
                 return self.send_json({"models": models, "error": None if models else
                                        "agy 沒有回傳模型清單，可能還沒登入。請在終端機執行一次 `agy` 完成登入後再重新整理。"})
             except Exception as e:
@@ -876,8 +913,14 @@ class Handler(BaseHTTPRequestHandler):
             if pr and pr.get("memory_auto", True) and reply and proc.returncode == 0:
                 threading.Thread(target=update_memory, args=(pr["id"], turn_material(text, reply)),
                                  daemon=True).start()
+        error = "\n".join(raw_other[-20:]) if proc.returncode not in (0, None) else None
+        model_gone = bool(error) and "invalid model selection" in error
+        if model_gone:                    # 選的模型已經不能用（agy 更新後被拿掉）：記下來，介面會重抓清單
+            forget_model(model)
+            error = (f"模型「{model}」目前無法使用（可能是 agy 更新後 Google 拿掉了這個模型）。"
+                     "模型清單已經更新，請在上方改選其他模型，再按「↻ 重新回答」。")
         emit({"event": "done", "conversation_id": new_cid, "code": proc.returncode,
-              "error": "\n".join(raw_other[-20:]) if proc.returncode not in (0, None) else None})
+              "error": error, "model_gone": model_gone})
 
 
 SERVER = None
