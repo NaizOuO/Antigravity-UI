@@ -104,6 +104,8 @@ MAX_ARG = 24000                                   # Windows 命令列長度保�
 
 RUNS = {}            # run_id -> Popen
 RUNS_LOCK = threading.Lock()
+STOPPED = set()      # 使用者按了停止的 run_id（自動重試時就不再重試）
+MODEL_RETRIES = 5    # 模型被 agy 判定「不存在」時自動重試的次數
 MODELS_CACHE = {"t": 0, "data": None}
 
 
@@ -169,7 +171,7 @@ def save_seen_models(seen):
 
 
 MODEL_FAILED = {}           # 模型 id -> 失敗時間；未列出的模型失敗後先隱藏一段時間（可能只是 agy 正在更新）
-FAILED_HIDE = 3600
+FAILED_HIDE = 600
 
 
 def forget_model(mid):
@@ -698,8 +700,10 @@ class Handler(BaseHTTPRequestHandler):
             dest.write_bytes(base64.b64decode(d["data"].split(",", 1)[-1]))
             return self.send_json({"path": str(dest), "name": d.get("name")})
         if u.path == "/api/stop":
+            rid = self.body().get("run_id")
+            STOPPED.add(rid)
             with RUNS_LOCK:
-                p = RUNS.get(self.body().get("run_id"))
+                p = RUNS.get(rid)
             if p and p.poll() is None:
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
                                capture_output=True, creationflags=NO_WINDOW)
@@ -840,7 +844,9 @@ class Handler(BaseHTTPRequestHandler):
                 instructions += "\n\n" + history_block(prior)
         prompt = build_prompt(text + (SEARCH_HINT if d.get("search") else ""), files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
-        cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json"]
+        # agy 1.3.3 起讀工作區以外的檔案需要授權（非互動模式會直接拒絕），
+        # 專案對話在專案資料夾裡跑，附件卻在 uploads：把 uploads 加進工作區
+        cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json", "--add-dir", str(UPLOADS)]
         if model:
             cmd += ["--model", model]
         # 不傳 --effort：模型 ID 本身已含強度（如 -high），另外加會衝突，Claude 也不支援
@@ -861,19 +867,43 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
 
-        try:
-            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
-        except OSError as e:
-            emit({"event": "done", "conversation_id": cid, "code": -1,
-                  "error": AGY_MISSING if isinstance(e, FileNotFoundError) else f"無法執行 agy：{e}"})
-            return
-        with RUNS_LOCK:
-            RUNS[run_id] = proc
-
         emit({"event": "run", "run_id": run_id})
-        reply, steps, new_cid, raw_other = "", [], cid, []
-        for raw in proc.stdout:
+        # agy 1.3.3 的模型目錄時有時無（同一個模型大約一半的機率被判定「不存在」），
+        # 這種失敗在驗證階段就發生、不耗額度，所以自動重試幾次
+        for attempt in range(1, MODEL_RETRIES + 1):
+            try:
+                proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+            except OSError as e:
+                emit({"event": "done", "conversation_id": cid, "code": -1,
+                      "error": AGY_MISSING if isinstance(e, FileNotFoundError) else f"無法執行 agy：{e}"})
+                return
+            with RUNS_LOCK:
+                RUNS[run_id] = proc
+            first = proc.stdout.readline()
+            if b"invalid model selection" not in first:
+                break                          # 正常開始，往下照常串流
+            rest = proc.stdout.read()
+            proc.wait()
+            text_out = (first + rest).decode("utf-8", errors="replace")
+            if attempt == MODEL_RETRIES or run_id in STOPPED:
+                proc = None
+                pre_output = text_out
+                break
+            emit({"event": "retry", "attempt": attempt, "max": MODEL_RETRIES})
+            time.sleep(2)
+
+        reply, steps, new_cid, raw_other, denied = "", [], cid, [], []
+        if proc is None:                        # 重試用完仍失敗：把 agy 的輸出當成錯誤訊息
+            raw_other = [l for l in pre_output.splitlines() if l.strip()]
+            lines = []
+            returncode = 1
+        else:
+            lines = [first] if first else []
+        if proc is not None:
+            import itertools
+            lines = itertools.chain(lines, proc.stdout)
+        for raw in lines:
             line = raw.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
@@ -894,10 +924,14 @@ class Handler(BaseHTTPRequestHandler):
                 r = ev.get("result") or {}
                 new_cid = r.get("conversation_id") or new_cid
                 reply = r.get("response") or reply
+                denied = [a.get("display_name") or a.get("action") for a in r.get("denied_actions") or []]
             emit(ev)
-        proc.wait()
+        if proc is not None:
+            proc.wait()
+            returncode = proc.returncode
         with RUNS_LOCK:
             RUNS.pop(run_id, None)
+        STOPPED.discard(run_id)
 
         if new_cid and (reply or steps or old):
             user_msg = {"role": "user", "text": text, "files": files}
@@ -910,16 +944,19 @@ class Handler(BaseHTTPRequestHandler):
             if reply and (is_new or (old and not prior and not user_named(old))):
                 threading.Thread(target=auto_title, args=(new_cid, text, reply), daemon=True).start()
             # 專案對話：背景整理記憶，不影響這次回覆
-            if pr and pr.get("memory_auto", True) and reply and proc.returncode == 0:
+            if pr and pr.get("memory_auto", True) and reply and returncode == 0:
                 threading.Thread(target=update_memory, args=(pr["id"], turn_material(text, reply)),
                                  daemon=True).start()
-        error = "\n".join(raw_other[-20:]) if proc.returncode not in (0, None) else None
+        error = "\n".join(raw_other[-20:]) if returncode not in (0, None) else None
+        if denied and not reply:          # 例如讀檔被拒：說清楚，而不是只顯示「沒有回覆」
+            error = (f"agy 拒絕了需要授權的操作（{'、'.join(denied)}），所以沒有產生回答。"
+                     "非互動模式無法跳出授權視窗；若是讀取附件，請確認介面已更新到最新版，再按「↻ 重新回答」。")
         model_gone = bool(error) and "invalid model selection" in error
         if model_gone:                    # 選的模型已經不能用（agy 更新後被拿掉）：記下來，介面會重抓清單
             forget_model(model)
-            error = (f"模型「{model}」目前無法使用（可能是 agy 更新後 Google 拿掉了這個模型）。"
-                     "模型清單已經更新，請在上方改選其他模型，再按「↻ 重新回答」。")
-        emit({"event": "done", "conversation_id": new_cid, "code": proc.returncode,
+            error = (f"模型「{model}」目前無法使用（自動重試 {MODEL_RETRIES} 次都被 agy 拒絕）。"
+                     "可以稍後再按「↻ 重新回答」，或在上方改選其他模型。")
+        emit({"event": "done", "conversation_id": new_cid, "code": returncode,
               "error": error, "model_gone": model_gone})
 
 

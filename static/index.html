@@ -482,6 +482,7 @@ async function runTurn(text, files, fork){
         let ev; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.event === "run") running = ev.run_id;
         if (ev.event === "init") st.set("模型思考中");
+        if (ev.event === "retry") st.set(`agy 暫時找不到這個模型，自動重試中（第 ${ev.attempt}/${ev.max} 次）`);
         const su = ev.step_update;
         if (su){
           if (su.step_type === "agent_response" && su.text_delta){ reply += su.text_delta; st.hide(); }
