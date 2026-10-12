@@ -450,9 +450,26 @@ def history_block(prior):
     return "\n\n".join(parts)
 
 
+def squash(s):
+    return re.sub(r"\s+", "", s or "")      # 忽略空白和換行再比對
+
+
+def user_named(h):
+    """標題是不是使用者自己取的。v1.3.0 起改名會記錄 renamed；更早改過的名稱沒有紀錄，
+    就看標題是否和第一則訊息原文不同（而且不是自動產生的標題）。"""
+    if h.get("renamed"):
+        return True
+    if h.get("auto_titled"):
+        return False
+    msgs = h.get("messages") or []
+    raw = ((msgs[0].get("text") or "（附件）")[:40]) if msgs else ""
+    return squash(h.get("title")) != squash(raw)
+
+
 def save_fork(old, prior, new_cid, model, user_msg, reply):
     with HIST_LOCK:
-        h = {**{k: old.get(k) for k in ("title", "created", "project", "renamed")},
+        h = {**{k: old.get(k) for k in ("title", "created", "project", "auto_titled")},
+             "renamed": user_named(old),      # 舊版改過的名稱也在這裡補上紀錄，之後不會被自動標題覆蓋
              "id": new_cid, "model": model, "updated": time.time(), "messages": prior + [user_msg, reply]}
         write_hist(h)
         if old["id"] != new_cid:          # 舊的分支拿掉（連同專案資料夾裡的副本）
@@ -502,10 +519,7 @@ def retitle_legacy(limit=30):
             continue
         msgs = h.get("messages") or []
         answer = next((m.get("text") for m in msgs if m["role"] == "assistant" and m.get("text") != FAILED_REPLY), None)
-        if h.get("renamed") or h.get("auto_titled") or not msgs or not answer:
-            continue
-        squash = lambda s: re.sub(r"\s+", "", s or "")       # 忽略空白和換行再比對
-        if squash(h.get("title")) != squash((msgs[0].get("text") or "（附件）")[:40]):
+        if h.get("auto_titled") or not msgs or not answer or user_named(h):
             continue
         auto_title(h["id"], msgs[0].get("text") or "", answer)
         done += 1
@@ -855,7 +869,8 @@ class Handler(BaseHTTPRequestHandler):
                 save_fork(old, prior, new_cid, model, user_msg, reply_msg)
             else:
                 save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None)
-            if (is_new or (old and not prior)) and reply:     # 新對話（或重問第一則）：背景用 Flash 取標題
+            # 新對話，或重問／編輯第一則（使用者沒自己取過名稱時）：背景用 Flash 取標題
+            if reply and (is_new or (old and not prior and not user_named(old))):
                 threading.Thread(target=auto_title, args=(new_cid, text, reply), daemon=True).start()
             # 專案對話：背景整理記憶，不影響這次回覆
             if pr and pr.get("memory_auto", True) and reply and proc.returncode == 0:
