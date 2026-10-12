@@ -52,7 +52,8 @@ button{cursor:pointer}
 #pmem{height:120px;font-size:13px}
 .memrow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;margin-top:4px}
 .memrow button{border:1px solid var(--border);background:none;border-radius:6px;padding:3px 10px;font-size:13px}
-#pmemInfo{color:var(--muted);font-size:12px}
+#pmemInfo,#pmemCount,#ptrans{color:var(--muted);font-size:12px}
+#pmemCount.over{color:var(--danger);font-weight:600}
 #banner{background:var(--code);border-bottom:1px solid var(--border);border-left:4px solid var(--danger);padding:10px 16px;font-size:14px;white-space:pre-wrap}
 /* 專案管理對話框 */
 #pdlg label.f{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
@@ -214,8 +215,9 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
   <textarea id="pmem" placeholder="還沒有記憶。在這個專案裡對話後會自動整理；也可以自己寫下要它記住的事。"></textarea>
   <div class="memrow">
     <label><input type="checkbox" id="pmemAuto"> 每次對話後自動更新記憶（用 Gemini Flash，額度很少）</label>
-    <span><span id="pmemInfo"></span> <button id="pmemRebuild" title="讀這個專案的所有對話，重新整理一份記憶">從所有對話重建</button></span>
+    <span><span id="pmemCount"></span> <span id="pmemInfo"></span> <button id="pmemRebuild" title="讀這個專案的所有對話，重新整理一份記憶">從所有對話重建</button></span>
   </div>
+  <div id="ptrans"></div>
   <label class="f">專案檔案（模型會依問題自己挑需要的檔案讀；可直接把檔案拖進下面框框）</label>
   <div id="pfiles"></div>
   <input type="file" id="pfileIn" multiple hidden>
@@ -716,14 +718,26 @@ pf.addEventListener("dragleave", () => pf.classList.remove("drag"));
 pf.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); pf.classList.remove("drag"); if (e.dataTransfer?.files?.length) uploadProjectFiles(e.dataTransfer.files); });
 $("#pClose").onclick = () => $("#pdlg").close();
 $("#pSave").onclick = async () => {
-  await post("/api/project/update", {id:project, name:$("#pname").value, instructions:$("#pinstr").value,
-                                      memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked});
+  const r = await post("/api/project/update", {id:project, name:$("#pname").value, instructions:$("#pinstr").value,
+                                               memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked});
+  if (r.ok === false){ alert(r.message); return; }
   $("#pdlg").close(); loadProjects();
 };
+let memLimit = 3000;
+function paintMemCount(){
+  const n = $("#pmem").value.trim().length, c = $("#pmemCount");
+  c.textContent = `${n} / ${memLimit} 字`;
+  c.classList.toggle("over", n > memLimit);
+}
+$("#pmem").addEventListener("input", paintMemCount);
 function paintMemory(p){
+  if (p.memory_limit) memLimit = p.memory_limit;
   $("#pmem").value = p.memory || "";
   $("#pmemAuto").checked = p.memory_auto !== false;
-  $("#pmemInfo").textContent = p.memory_updated ? "上次更新：" + new Date(p.memory_updated * 1000).toLocaleString("zh-TW", {hour12:false}) : "";
+  $("#pmemInfo").textContent = p.memory_updated ? "· 上次更新：" + new Date(p.memory_updated * 1000).toLocaleString("zh-TW", {hour12:false}) : "";
+  paintMemCount();
+  if (p.transcripts !== undefined)
+    $("#ptrans").textContent = p.transcripts ? `🔎 這個專案有 ${p.transcripts} 段過去的對話，記憶裡沒有的細節，模型需要時會自己搜尋。` : "";
 }
 $("#pmemRebuild").onclick = async () => {
   if ($("#pmem").value.trim() && !confirm("會讀這個專案的所有對話，重新整理記憶（目前的記憶會當作基礎一起參考）。繼續？")) return;

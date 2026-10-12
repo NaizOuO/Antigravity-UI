@@ -149,14 +149,79 @@ def project_files(pid):
     return [{"name": f.name, "path": str(f), "size": f.stat().st_size, "size_text": human_size(f.stat().st_size)} for f in fs]
 
 
-def project_block(proj):
+def project_block(proj, cid=None):
     files = project_files(proj["id"])
     if not files:
-        return f"\n\n[專案] 這個對話屬於專案「{proj['name']}」，目前專案裡還沒有檔案。"
-    lst = "\n".join(f"- {f['path']}（{f['size_text']}）" for f in files)
-    return (f"\n\n[專案資料] 這個對話屬於專案「{proj['name']}」，專案資料夾裡有以下檔案（使用者可能隨時增減）：\n{lst}\n"
-            "請依照問題判斷需要哪些檔案，用 view_file 讀取相關的檔案即可，不需要每次全部讀；"
-            "已經讀過且內容還記得的不必重讀。回答時請註明引用的檔名與頁碼。")
+        block = f"\n\n[專案] 這個對話屬於專案「{proj['name']}」，目前專案裡還沒有檔案。"
+    else:
+        lst = "\n".join(f"- {f['path']}（{f['size_text']}）" for f in files)
+        block = (f"\n\n[專案資料] 這個對話屬於專案「{proj['name']}」，專案資料夾裡有以下檔案（使用者可能隨時增減）：\n{lst}\n"
+                 "請依照問題判斷需要哪些檔案，用 view_file 讀取相關的檔案即可，不需要每次全部讀；"
+                 "已經讀過且內容還記得的不必重讀。回答時請註明引用的檔名與頁碼。")
+    conv_dir = proj_dir(proj["id"]) / "conversations"
+    others = [p for p in conv_dir.glob("*.md") if p.stem != (cid or "")] if conv_dir.exists() else []
+    if others:
+        others.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        shown = others[:TRANSCRIPT_LIST_MAX]
+        lst = "\n".join(f"- {p}（{transcript_title(p)}，{datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d}）" for p in shown)
+        more = f"\n（另有 {len(others) - len(shown)} 段較舊的對話也在同一個資料夾）" if len(others) > len(shown) else ""
+        block += (f"\n\n[過去的專案對話] 專案記憶只有重點。當使用者提到「之前討論過的」內容、或需要記憶裡沒有的細節時，"
+                  f"請從下面的過去對話紀錄挑標題相關的，用 view_file 讀取（不要用 run_command 或終端機指令）。用不到時不要讀。\n{lst}{more}")
+    return block
+
+
+TRANSCRIPT_LIST_MAX = 30          # 提示裡最多列出幾段過去的對話（最新的優先）
+
+
+def transcript_title(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.readline().lstrip("# ").strip()[:60] or "（未命名）"
+    except OSError:
+        return "（未命名）"
+
+
+# ---------- 專案對話紀錄（給模型搜尋用的 Markdown 副本） ----------
+def transcript_path(pid, cid):
+    return proj_dir(pid) / "conversations" / f"{re.sub(r'[^0-9a-zA-Z-]', '', cid)}.md"
+
+
+def write_transcript(h):
+    """把屬於專案的對話存一份 Markdown 到專案資料夾；不屬於專案或專案不存在就略過。"""
+    pid = h.get("project")
+    if not pid or not load_project(pid):
+        return
+    fmt = lambda t: datetime.fromtimestamp(t or 0).strftime("%Y-%m-%d %H:%M")
+    lines = [f"# {h.get('title') or '（未命名）'}", "",
+             f"對話 ID：{h['id']}　建立：{fmt(h.get('created'))}　最後更新：{fmt(h.get('updated'))}", ""]
+    for m in h.get("messages", []):
+        lines.append("## 使用者" if m["role"] == "user" else "## AI")
+        lines.append(m.get("text") or "")
+        if m.get("files"):
+            lines.append("（附件：" + "、".join(Path(f).name for f in m["files"]) + "）")
+        lines.append("")
+    p = transcript_path(pid, h["id"])
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(lines), encoding="utf-8")
+
+
+def remove_transcript(h):
+    if h and h.get("project"):
+        transcript_path(h["project"], h["id"]).unlink(missing_ok=True)
+
+
+def sync_transcripts():
+    """啟動時補齊：舊版建立的專案對話還沒有 Markdown 副本，或副本比紀錄舊。"""
+    for p in HISTORY.glob("*.json"):
+        try:
+            h = json.loads(p.read_text(encoding="utf-8"))
+            if not h.get("project"):
+                continue
+            t = transcript_path(h["project"], h["id"])
+            if not t.exists() or t.stat().st_mtime < p.stat().st_mtime:
+                write_transcript(h)
+        except Exception:
+            pass
 
 
 # ---------- 專案記憶（像 claude.ai Projects：同一個專案的對話共享長期重點） ----------
@@ -167,7 +232,8 @@ MEMORY_PROMPT = """你是專案「{name}」的記憶整理員。這份記憶會�
 請根據「目前的記憶」和「新的對話內容」，輸出更新後的完整記憶：
 - 用繁體中文 Markdown 條列，可以分幾個小標題（例如：使用者背景與偏好、專案目標、已確認的結論與數值、檔案重點、待解決的問題）
 - 只保留之後對話會用到、長期有效的資訊；一次性的閒聊、寒暄、AI 自己的解說過程都不要記
-- 新資訊和舊記憶衝突時以新的為準；過時的刪掉；總長度控制在 40 條以內
+- 新資訊和舊記憶衝突時以新的為準；過時的刪掉；總長度控制在 40 條、{limit} 字以內
+- 細節不必全記：過去的對話紀錄另外存在專案資料夾，需要時 AI 可以搜尋，記憶只要記重點
 - 沒有值得記的新資訊時，原樣輸出目前的記憶
 - 只輸出記憶本身，不要任何前言或結語，也不要使用任何工具
 
@@ -189,6 +255,58 @@ def memory_model():
     return next((i for i in ids if "flash" in i and i.endswith("-low")), None)
 
 
+MEMORY_MAX = 3000          # 記憶的硬上限（字數）；每個新對話都會帶上它，太長會一直多花 token
+COMPRESS_PROMPT = """下面是專案「{name}」的記憶，目前 {length} 字，超過上限 {limit} 字。
+請把它壓縮到 {target} 字以內：合併重複的條目、刪掉較不重要或已過時的細節，保留使用者背景與偏好、專案目標、已確認的結論與數值、待解決的問題。
+格式維持繁體中文 Markdown 條列。只輸出壓縮後的記憶本身，不要任何前言或結語，也不要使用任何工具。
+
+{memory}
+"""
+
+
+def run_agy_text(prompt, name):
+    """用記憶模型跑一次 agy，回傳文字結果（失敗時丟出 RuntimeError）。"""
+    if len(prompt) > MAX_ARG:      # 內容太長：存成檔案讓模型讀
+        f = WORK / f"{name}.md"
+        f.write_text(prompt, encoding="utf-8")
+        prompt = f"請用 view_file 完整讀取這個檔案，並嚴格依照檔案裡的指示輸出：\n- {f}"
+    cmd = [agy_exe(), "-p", prompt, "--output-format", "json"]
+    model = memory_model()
+    if model:
+        cmd += ["--model", model]
+    try:
+        out = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", creationflags=NO_WINDOW, timeout=300).stdout
+        r = json.loads(out)
+    except Exception as e:
+        raise RuntimeError(f"呼叫 agy 失敗：{e}")
+    text = (r.get("response") or "").strip()
+    if r.get("status") != "SUCCESS" or not text:
+        raise RuntimeError("模型沒有回傳內容")
+    return text
+
+
+def clip_memory(text, limit=MEMORY_MAX):
+    """最後保險：超過上限時從最後一個完整的行截斷。"""
+    if len(text) <= limit:
+        return text
+    note = "\n- …（記憶已達上限，較後面的內容被截斷）"
+    cut = text[:limit - len(note)]
+    return cut[:cut.rfind("\n")].rstrip() + note if "\n" in cut else cut + note
+
+
+def fit_memory(name, text):
+    """超過上限就請模型壓縮一次；還是太長才截斷。"""
+    if len(text) <= MEMORY_MAX:
+        return text
+    try:
+        text = run_agy_text(COMPRESS_PROMPT.format(name=name, length=len(text), limit=MEMORY_MAX,
+                                                   target=int(MEMORY_MAX * 0.8), memory=text), "memory_compress")
+    except RuntimeError:
+        pass
+    return clip_memory(text)
+
+
 def update_memory(pid, material):
     """用 material（對話內容）更新專案記憶；同一個專案一次只跑一個。回傳 (ok, 訊息)。"""
     lock = MEMORY_LOCKS.setdefault(pid, threading.Lock())
@@ -196,24 +314,12 @@ def update_memory(pid, material):
         pr = load_project(pid)
         if not pr:
             return False, "專案不存在"
-        prompt = MEMORY_PROMPT.format(name=pr["name"], memory=pr.get("memory") or "（目前沒有記憶）", material=material)
-        if len(prompt) > MAX_ARG:      # 內容太長：存成檔案讓模型讀
-            f = WORK / f"memory_{pid}.md"
-            f.write_text(prompt, encoding="utf-8")
-            prompt = f"請用 view_file 完整讀取這個檔案，並嚴格依照檔案裡的指示輸出（只輸出記憶本身）：\n- {f}"
-        cmd = [agy_exe(), "-p", prompt, "--output-format", "json"]
-        model = memory_model()
-        if model:
-            cmd += ["--model", model]
+        prompt = MEMORY_PROMPT.format(name=pr["name"], memory=pr.get("memory") or "（目前沒有記憶）",
+                                      material=material, limit=MEMORY_MAX)
         try:
-            out = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace", creationflags=NO_WINDOW, timeout=300).stdout
-            r = json.loads(out)
-        except Exception as e:
+            text = fit_memory(pr["name"], run_agy_text(prompt, f"memory_{pid}"))
+        except RuntimeError as e:
             return False, f"整理記憶失敗：{e}"
-        text = (r.get("response") or "").strip()
-        if r.get("status") != "SUCCESS" or not text:
-            return False, "整理記憶失敗：模型沒有回傳內容"
         pr = load_project(pid) or pr       # 期間使用者可能改過名稱或指示
         pr.update(memory=text, memory_updated=time.time())
         save_project(pr)
@@ -275,6 +381,7 @@ def save_turn(cid, model, user_msg, reply, project=None):
     h["updated"] = time.time()
     h["messages"] += [user_msg, reply]
     hist_path(cid).write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
+    write_transcript(h)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -351,7 +458,9 @@ class Handler(BaseHTTPRequestHandler):
             pr = load_project(u.path.rsplit("/", 1)[1])
             if not pr:
                 return self.send_json({"error": "not found"}, 404)
-            return self.send_json({**pr, "files": project_files(pr["id"])})
+            conv_dir = proj_dir(pr["id"]) / "conversations"
+            return self.send_json({**pr, "files": project_files(pr["id"]), "memory_limit": MEMORY_MAX,
+                                   "transcripts": len(list(conv_dir.glob("*.md"))) if conv_dir.exists() else 0})
         if u.path == "/api/history":
             want = q.get("project", [""])[0]   # 空字串 = 不屬於任何專案的一般對話
             items = []
@@ -398,7 +507,9 @@ class Handler(BaseHTTPRequestHandler):
             SETTINGS.write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
             return self.send_json(s)
         if u.path == "/api/delete":
-            p = hist_path(self.body().get("id", ""))
+            cid = self.body().get("id", "")
+            remove_transcript(load_hist(cid))
+            p = hist_path(cid)
             if p.exists():
                 p.unlink()
             return self.send_json({"ok": True})
@@ -410,6 +521,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "not found"}, 404)
             h["title"] = title[:80]
             hist_path(h["id"]).write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
+            write_transcript(h)
             return self.send_json({"ok": True})
         if u.path.startswith("/api/project/"):
             return self.project_action(u.path.rsplit("/", 1)[1], self.body())
@@ -447,6 +559,8 @@ class Handler(BaseHTTPRequestHandler):
         if not pr:
             return self.send_json({"error": "project not found"}, 404)
         if action == "update":
+            if isinstance(d.get("memory"), str) and len(d["memory"].strip()) > MEMORY_MAX:
+                return self.send_json({"ok": False, "message": f"專案記憶最多 {MEMORY_MAX} 字（目前 {len(d['memory'].strip())} 字），請刪減後再儲存。"})
             for k in ("name", "instructions", "memory"):
                 if isinstance(d.get(k), str):
                     pr[k] = d[k].strip()[:60] if k == "name" else d[k]
@@ -503,9 +617,9 @@ class Handler(BaseHTTPRequestHandler):
                 instructions += f"\n\n[這個專案的指示]\n{pr['instructions'].strip()}"
             if pr and pr.get("memory", "").strip():
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
-                                 f"和使用者現在說的衝突時以使用者為準）：\n{pr['memory'].strip()}")
+                                 f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
         prompt = build_prompt(text + (SEARCH_HINT if d.get("search") else ""), files, instructions,
-                              project_block(pr) if pr else "")
+                              project_block(pr, cid) if pr else "")
         cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json"]
         if model:
             cmd += ["--model", model]
@@ -622,6 +736,7 @@ def main():
             webbrowser.open(url)
         return
     SERVER = srv
+    threading.Thread(target=sync_transcripts, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     print(f"Antigravity 介面：{url}")

@@ -1,13 +1,13 @@
 {
- "version": "1.0.1",
+ "version": "1.1.0",
  "files": {
-  "server.py": "267b5f7efb4d1af04795379dabb3613f082c18c0315b15c9ce0f5e514095ac35",
-  "version.py": "7ebb4b8acf7888072d2f6146a719cdf9905fba1938a400ab5ee37f7021e00afb",
+  "server.py": "1d8b7143ebeb8eb4f407a3124956466b4356d90f884ba905bef3f10338beca77",
+  "version.py": "6af50ddba7c2f58d393ebb3c2a3582bcae900b9c3f1619ec74ce0ce2602638bb",
   "updater.py": "897f802aa96890c04b62137efe0b3c34716f9f91d123360527c3fa8c763634e4",
-  "static/index.html": "5542ebed517b2a91b9758bd18e64f5784af079f78a41e210647ada5b26ab53e2",
+  "static/index.html": "072c395039e06c88b7abe7e7af430d225b8857e49b1c429e8acb4dd6aeb5d910",
   "啟動.vbs": "cfba1fed990ffddff8b9aa9a7992f555fbd94acea9c47483d46999628c846c08",
   "關閉.bat": "ea4b8cd327708555cc6fed749536281bf213504f6008afe824b35d307fc54ac9",
   "打包分享.bat": "b8380a11428ec0082442e0d5542b3bc8f3f22a42316eafdaaecde64a4a37884c",
-  "README.md": "dea83ba61269522730da990f649ba91ac55a571cd01ccd6830c8f6a47984b7a4"
+  "README.md": "8941f28eedc7431619ca149d301d26c2ef0a5dded6ab5921732aad90acd242f6"
  }
 }
