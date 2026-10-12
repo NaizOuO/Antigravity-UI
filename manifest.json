@@ -1,8 +1,8 @@
 {
- "version": "1.3.0",
+ "version": "1.3.1",
  "files": {
-  "server.py": "dea617fba5a2585a1cb7fa7601bfa2e0d02d472d15e1283b1c5b9d8045610771",
-  "version.py": "503f4102666ab065ac70e37de215cb2a052a7afb93ca8caf6526a12fb45d8f86",
+  "server.py": "e7bdbbabd8a8a3af5838c2c65a900856be257457cd47e0dff40fe9da28b4e987",
+  "version.py": "4e268a99c88f65e4052c35c56649975fc8ec0b99b44b6e1e3d40b6afa5eb20e1",
   "updater.py": "bb6e7594d3f2eb0cb8a7f3adbba26d0ea46509a33d3bbc4273209fcdea0954e8",
   "static/index.html": "5730f4893fff2442a6cd11c3f5b76e76668717ca01a7fcde354d44f42862f8e2",
   "static/icon.png": "7c66719fe91b5c63ee1905c285b19bfd8314a2d5594a669a095c48dc1f84f291",
