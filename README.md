@@ -1,0 +1,51 @@
+# Antigravity CLI 網頁介面
+
+在瀏覽器裡使用 Google Antigravity CLI（`agy`）：可以切換模型、附加圖片／PDF／檔案、建立專案（多份 PDF + 共享記憶）、看用量、開關聯網搜尋。
+每則訊息都是呼叫官方 `agy -p`，登入的是你自己的帳號。
+
+## 下載
+到 [Releases](https://github.com/NaizOuO/Antigravity-UI/releases/latest) 下載最新的 `Antigravity-UI-v*.zip`，解壓縮到任何地方。
+
+## 需要先準備
+1. 安裝 [Python 3](https://www.python.org/downloads/)（安裝時勾選 "Add python.exe to PATH"）。
+2. 安裝 Antigravity CLI（`agy`），並在終端機執行一次 `agy` 完成登入。
+
+## 使用
+- 雙擊 `啟動.vbs`：在背景啟動，並自動打開 http://127.0.0.1:8765
+- 雙擊 `關閉.bat`：關掉背景伺服器
+- 右上角「常駐指示」：設定每個新對話開頭自動附上的指示（例如你的科系、回答語言）
+- 左側「專案」：
+  - 上傳多份 PDF／講義，提問時模型會自己挑需要的檔案讀，並註明出處
+  - **專案記憶**：每次在專案裡對話後，會在背景整理重點（使用者背景、結論、數值、待辦），
+    這個專案的每個新對話都會記得。可以在專案設定裡查看、修改、關閉自動更新，或「從所有對話重建」。
+    整理記憶用 Gemini Flash，額度消耗很少。
+
+## 更新
+開啟介面時會自動檢查有沒有新版本，有的話上方會出現「⬆ 有新版本」，按「更新」就會自動下載、換好並重新啟動。
+左下角也可以手動「檢查更新」。
+
+**更新只會換掉程式檔案，`data/` 資料夾（對話紀錄、專案、上傳的檔案、設定）永遠不會被動到。**
+更新途中失敗會自動還原成舊版。
+
+## 打不開時
+- **跳出「無法啟動介面伺服器」或「系統找不到指定的檔案」**：通常是沒有安裝 Python。到 python.org 下載安裝，
+  第一個畫面勾選「Add python.exe to PATH」，裝完再雙擊 `啟動.vbs`。
+- **網頁開了但上方出現紅色提示「找不到 Antigravity CLI」**：還沒安裝 agy，或還沒登入。安裝後在終端機執行一次 `agy` 登入，
+  再雙擊 `關閉.bat`、`啟動.vbs` 重新啟動。
+- **其他錯誤**：查看 `data/server.log`。
+
+## 資料存放
+所有個人資料都放在 `data/`，第一次啟動時會自動建立：
+- `data/history/`：對話紀錄
+- `data/projects/`：專案（檔案、指示、記憶）
+- `data/workspace/uploads/`：對話中上傳的附件
+- `data/settings.json`：常駐指示
+
+`data/` 不會進版本控制、不會被打包，也不會被更新覆蓋。
+
+## 發布新版（開發者）
+```
+python release.py 1.1.0 "更新內容第一行" "第二行"
+```
+會改 `version.py`、產生 `manifest.json` 與 `dist/Antigravity-UI-v1.1.0.zip`，然後 commit、tag、push 並建立 GitHub Release。
+大家的介面下次開啟時就會看到更新通知。

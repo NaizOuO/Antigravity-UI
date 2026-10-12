@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Antigravity 介面</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+:root{
+  --bg:#f7f7f5; --panel:#ffffff; --side:#efeee9; --text:#1d1d1b; --muted:#6b6b66;
+  --border:#dedcd5; --accent:#2f6fde; --accent-text:#fff; --user:#e6eefc; --code:#f1f0ec; --danger:#c43c3c;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#1b1b1d; --panel:#232326; --side:#18181a; --text:#e8e6e1; --muted:#9a9890;
+    --border:#38373a; --accent:#5b8cff; --accent-text:#fff; --user:#25324d; --code:#2c2c30; --danger:#ff6b6b;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 "Segoe UI","Microsoft JhengHei",system-ui,sans-serif;display:flex;overflow:hidden}
+html{overflow:hidden}
+#comp{flex-shrink:0}
+#hist{min-height:0}
+#main{height:100%}
+button,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+/* sidebar */
+#side{width:250px;background:var(--side);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+#side .top{padding:12px}
+#newBtn{width:100%;padding:9px;border:1px solid var(--border);background:var(--panel);border-radius:8px}
+#newBtn:hover{border-color:var(--accent)}
+#hist{flex:1;overflow:auto;padding:0 8px 12px}
+.hitem{display:flex;align-items:center;gap:4px;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:14px}
+.hitem:hover{background:var(--panel)}
+.hitem.active{background:var(--panel);font-weight:600}
+.hitem span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hitem button{border:0;background:none;color:var(--muted);visibility:hidden;padding:0 3px}
+.hitem:hover button{visibility:visible}
+.hitem input{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--accent);border-radius:4px;padding:1px 4px}
+.hitem .cnt{flex:none;font-size:12px;color:var(--muted)}
+.sect{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 4px;font-size:12px;color:var(--muted);letter-spacing:.04em}
+.sect button{border:0;background:none;color:var(--muted);font-size:16px;padding:0 4px}
+.sect button:hover{color:var(--accent)}
+#projs{padding:0 8px 6px;max-height:40%;overflow:auto;flex-shrink:0}
+#projChip{display:none}
+#ver{padding:8px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)}
+#ver a{color:var(--muted)}
+#pmem{height:120px;font-size:13px}
+.memrow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;margin-top:4px}
+.memrow button{border:1px solid var(--border);background:none;border-radius:6px;padding:3px 10px;font-size:13px}
+#pmemInfo{color:var(--muted);font-size:12px}
+#banner{background:var(--code);border-bottom:1px solid var(--border);border-left:4px solid var(--danger);padding:10px 16px;font-size:14px;white-space:pre-wrap}
+/* 專案管理對話框 */
+#pdlg label.f{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+#pdlg input[type=text]{width:100%;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:6px 8px;color:var(--text);font:inherit}
+#pdlg textarea{height:90px}
+#pfiles{border:1px dashed var(--border);border-radius:8px;padding:6px;max-height:38vh;overflow:auto}
+#pfiles.drag{border-color:var(--accent);background:var(--code)}
+.pf{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:14px}
+.pf:hover{background:var(--code)}
+.pf a{flex:1;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf .s{font-size:12px;color:var(--muted)}
+.pf button{border:0;background:none;color:var(--muted);padding:0 4px}
+.pfempty{color:var(--muted);font-size:13px;text-align:center;padding:16px 8px}
+.projcard{display:inline-block;text-align:left;border:1px solid var(--border);background:var(--panel);border-radius:10px;padding:10px 14px;margin-top:8px;max-width:520px}
+.projcard button{margin-top:8px;border:1px solid var(--border);background:none;border-radius:6px;padding:4px 12px}
+/* main */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#bar{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel);flex-wrap:wrap}
+#bar label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+#bar select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+#bar .sp{flex:1}
+#bar .ghost{border:1px solid var(--border);background:none;border-radius:6px;padding:5px 10px;font-size:13px}
+#toggleSide{display:none}
+#bar .ghost.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+#usageChip{font-variant-numeric:tabular-nums}
+.ugroup{margin:0 0 14px}
+.ugroup h4{margin:0 0 2px}
+.ugroup .d{font-size:12px;color:var(--muted);margin-bottom:6px}
+.ubar{margin:6px 0}
+.ubar .l{display:flex;justify-content:space-between;font-size:13px}
+.ubar .t{height:8px;background:var(--code);border-radius:4px;overflow:hidden;margin-top:3px}
+.ubar .f{height:100%;background:var(--accent)}
+.ubar .f.low{background:var(--danger)}
+.ubar .r{font-size:12px;color:var(--muted)}
+#jump{position:absolute;left:50%;transform:translateX(-50%);bottom:8px;border:1px solid var(--border);background:var(--panel);border-radius:16px;padding:3px 12px;font-size:13px;display:none;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+#msgsWrap{flex:1;position:relative;display:flex;min-height:0}
+/* 生成中的狀態列 */
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;margin:2px 0 6px}
+.spin{width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* 右側問題索引：平常是一排短線，滑過去展開成問題清單 */
+#outline{position:absolute;top:16px;right:14px;z-index:4;display:none;flex-direction:column;align-items:flex-end;gap:2px;
+  max-height:calc(100% - 70px);overflow-y:auto;padding:8px 6px;border-radius:10px;border:1px solid transparent;scrollbar-width:none}
+#outline .oi{display:flex;align-items:center;justify-content:flex-end;gap:8px;cursor:pointer;padding:3px 4px;border-radius:5px;min-height:14px}
+#outline .dash{width:14px;height:3px;border-radius:2px;background:var(--muted);opacity:.45;flex-shrink:0;transition:.15s}
+#outline .oi.active .dash{background:var(--accent);opacity:1;width:20px}
+#outline .txt{display:none;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;color:var(--muted)}
+#outline .oi.active .txt{color:var(--text);font-weight:600}
+#outline:hover{background:var(--panel);border-color:var(--border);box-shadow:0 4px 16px rgba(0,0,0,.18)}
+#outline:hover .txt{display:block}
+#outline .oi:hover{background:var(--code)}
+#outline .oi:hover .dash{opacity:1}
+#msgs{flex:1;overflow:auto;padding:24px 16px}
+.wrap{max-width:860px;margin:0 auto}
+.msg{margin:0 0 18px}
+.msg.user .bubble{background:var(--user);border-radius:12px;padding:10px 14px;margin-left:auto;max-width:85%;width:fit-content;white-space:pre-wrap;word-break:break-word}
+.msg.assistant .bubble{padding:2px 2px;word-break:break-word}
+.bubble img.thumb{max-width:220px;max-height:160px;border-radius:6px;display:block;margin:6px 0}
+.filetag{display:inline-block;font-size:12px;background:var(--code);border:1px solid var(--border);border-radius:5px;padding:1px 7px;margin:4px 4px 0 0}
+.steps{font-size:12.5px;color:var(--muted);margin-bottom:6px}
+.steps div::before{content:"⚙ ";}
+.bubble pre{background:var(--code);padding:10px 12px;border-radius:8px;overflow:auto;font-size:13.5px}
+.bubble code{background:var(--code);padding:1px 4px;border-radius:4px;font-family:Consolas,monospace;font-size:.92em}
+.bubble pre code{background:none;padding:0}
+.bubble table{border-collapse:collapse;display:block;overflow:auto}
+.bubble td,.bubble th{border:1px solid var(--border);padding:4px 8px}
+.bubble blockquote{border-left:3px solid var(--border);margin:0;padding-left:12px;color:var(--muted)}
+.katex-display{overflow-x:auto;overflow-y:hidden;padding:4px 0}
+.meta{font-size:12px;color:var(--muted);margin-top:4px}
+.err{color:var(--danger);white-space:pre-wrap;font-size:13px}
+.typing::after{content:"▍";animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+#empty{color:var(--muted);text-align:center;margin-top:12vh}
+#empty h2{color:var(--text);font-weight:600}
+/* composer */
+#comp{padding:10px 16px 16px;background:var(--bg)}
+#box{max-width:860px;margin:0 auto;border:1px solid var(--border);background:var(--panel);border-radius:14px;padding:8px 10px}
+#box.drag{border-color:var(--accent);border-style:dashed}
+#chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:flex;align-items:center;gap:6px;font-size:12.5px;background:var(--code);border-radius:6px;padding:3px 6px 3px 4px;max-width:260px}
+.chip img{width:28px;height:28px;object-fit:cover;border-radius:4px}
+.chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip button{border:0;background:none;color:var(--muted);padding:0 2px}
+#input{width:100%;border:0;outline:0;resize:none;background:none;min-height:44px;max-height:40vh;padding:6px 2px}
+#row{display:flex;align-items:center;gap:8px}
+#row .hint{flex:1;font-size:12px;color:var(--muted)}
+#attach{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px}
+#send{border:0;background:var(--accent);color:var(--accent-text);border-radius:8px;padding:6px 16px;font-weight:600}
+#send.stop{background:var(--danger)}
+#send:disabled{opacity:.5;cursor:default}
+/* settings dialog */
+dialog{border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text);width:min(560px,92vw)}
+dialog textarea{width:100%;height:160px;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:8px}
+dialog .r{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+dialog button{border:1px solid var(--border);background:none;border-radius:6px;padding:5px 14px}
+@media (max-width:760px){
+  #side{position:fixed;z-index:5;height:100%;transform:translateX(-100%);transition:.2s}
+  #side.open{transform:none}
+  #toggleSide{display:inline-block}
+  #bar{padding:8px 16px}
+}
+</style>
+</head>
+<body>
+<aside id="side">
+  <div class="top"><button id="newBtn">＋ 新對話</button></div>
+  <div class="sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
+  <div id="projs"></div>
+  <div class="sect"><span id="histLabel">對話</span></div>
+  <div id="hist"></div>
+  <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a></div>
+</aside>
+<main id="main">
+  <div id="bar">
+    <button class="ghost" id="toggleSide">☰</button>
+    <label>模型 <select id="family"><option>載入中…</option></select></label>
+    <label title="只列出這個模型實際支援的強度">思考強度 <select id="effort"></select></label>
+    <button class="ghost" id="searchBtn" title="開啟後會要求模型先上網搜尋並附來源（關閉時模型仍可能自己決定搜尋）">🌐 聯網搜尋</button>
+    <span class="sp"></span>
+    <button class="ghost on" id="updBtn" hidden></button>
+    <button class="ghost" id="projChip" title="管理專案檔案與指示"></button>
+    <button class="ghost" id="usageChip" title="查看用量">用量</button>
+    <button class="ghost" id="settingsBtn">常駐指示</button>
+  </div>
+  <div id="banner" hidden></div>
+  <div id="msgsWrap">
+    <div id="msgs" style="flex:1"><div class="wrap" id="list">
+      <div id="empty"><h2>Antigravity CLI</h2><p>輸入問題，或把 PDF / 圖片拖進來、直接 Ctrl+V 貼上截圖。</p></div>
+    </div></div>
+    <button id="jump">↓ 跳到最新</button>
+    <nav id="outline" aria-label="問題索引"></nav>
+  </div>
+  <div id="comp">
+    <div id="box">
+      <div id="chips"></div>
+      <textarea id="input" rows="2" placeholder="問點什麼…（Enter 送出，Shift+Enter 換行）"></textarea>
+      <div id="row">
+        <button id="attach" title="附加檔案">📎 附件</button>
+        <input type="file" id="fileIn" multiple hidden>
+        <span class="hint" id="hint"></span>
+        <button id="send">送出</button>
+      </div>
+    </div>
+  </div>
+</main>
+<dialog id="dlg">
+  <h3 style="margin-top:0">常駐指示</h3>
+  <p style="font-size:13px;color:var(--muted);margin-top:0">每個新對話的第一則訊息前會自動附上這段文字。</p>
+  <textarea id="instr"></textarea>
+  <div class="r"><button id="dlgCancel">取消</button><button id="dlgSave">儲存</button></div>
+</dialog>
+<dialog id="pdlg">
+  <h3 style="margin-top:0">專案設定</h3>
+  <label class="f">專案名稱</label>
+  <input type="text" id="pname">
+  <label class="f">專案指示（這個專案的新對話會自動附上，例如「這些是我們實驗室 transmon 相關論文」）</label>
+  <textarea id="pinstr"></textarea>
+  <label class="f">🧠 專案記憶（這個專案每個新對話開頭都會帶上；可以直接修改）</label>
+  <textarea id="pmem" placeholder="還沒有記憶。在這個專案裡對話後會自動整理；也可以自己寫下要它記住的事。"></textarea>
+  <div class="memrow">
+    <label><input type="checkbox" id="pmemAuto"> 每次對話後自動更新記憶（用 Gemini Flash，額度很少）</label>
+    <span><span id="pmemInfo"></span> <button id="pmemRebuild" title="讀這個專案的所有對話，重新整理一份記憶">從所有對話重建</button></span>
+  </div>
+  <label class="f">專案檔案（模型會依問題自己挑需要的檔案讀；可直接把檔案拖進下面框框）</label>
+  <div id="pfiles"></div>
+  <input type="file" id="pfileIn" multiple hidden>
+  <div class="r" style="justify-content:space-between">
+    <button id="pUpload">＋ 上傳檔案</button>
+    <span><button id="pClose">取消</button> <button id="pSave">儲存</button></span>
+  </div>
+</dialog>
+<dialog id="updlg">
+  <h3 style="margin-top:0" id="updTitle">有新版本</h3>
+  <div id="updBody" class="bubble" style="max-height:45vh;overflow:auto"></div>
+  <p class="meta">更新只會換掉程式檔案；你的對話紀錄、專案、上傳的檔案和設定（data 資料夾）都不會動到。更新完會自動重新啟動。</p>
+  <div class="r"><button id="updLater">稍後</button><button id="updGo">更新</button></div>
+</dialog>
+<dialog id="udlg">
+  <h3 style="margin-top:0">用量</h3>
+  <div id="ubody">讀取中…</div>
+  <div class="r"><button id="uRefresh">重新整理</button><button id="uClose">關閉</button></div>
+</dialog>
+<script>
+const $ = s => document.querySelector(s);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : v; }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch{} }
+};
+
+let convId = null, running = null, pending = [];   // pending: [{path,name,url,isImg}]
+
+/* ---------- markdown + LaTeX ---------- */
+function renderMd(src){
+  const maths = [];
+  const keep = (tex, display) => { maths.push({tex, display}); return `@@MATH${maths.length-1}@@`; };
+  // 先保護程式碼區塊，避免裡面的 $ 被當成數學
+  const codes = [];
+  src = src.replace(/```[\s\S]*?```|`[^`\n]+`/g, m => { codes.push(m); return `@@CODE${codes.length-1}@@`; });
+  src = src.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => keep(t, true))
+           .replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => keep(t, true))
+           .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => keep(t, false))
+           .replace(/(^|[^\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g, (_, pre, t) => pre + keep(t, false));
+  src = src.replace(/@@CODE(\d+)@@/g, (_, i) => codes[i]);
+  let html = DOMPurify.sanitize(marked.parse(src, {gfm:true, breaks:false}));
+  html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
+    const m = maths[i];
+    try { return katex.renderToString(m.tex, {displayMode:m.display, throwOnError:false}); }
+    catch { return m.tex; }
+  });
+  // agy 回覆裡的 file:/// 連結改成走本機伺服器
+  html = html.replace(/href="file:\/\/\/([^"]+)"/g, (_, p) => `href="/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g,'\\'))}" target="_blank"`);
+  return html;
+}
+
+/* ---------- messages ---------- */
+const isImg = n => /\.(png|jpe?g|gif|webp|bmp)$/i.test(n);
+const fileUrl = p => "/api/file?p=" + encodeURIComponent(p);
+const baseName = p => p.split(/[\\/]/).pop().replace(/^[0-9a-f]{6}_/, "");
+function clearEmpty(){ const e = $("#empty"); if (e) e.remove(); }
+// 只有在使用者本來就在最底部時才自動跟隨；往上捲就停下來讓你慢慢看
+let follow = true;
+const nearBottom = () => { const m = $("#msgs"); return m.scrollHeight - m.scrollTop - m.clientHeight < 60; };
+function scrollDown(force){
+  const m = $("#msgs");
+  if (force) follow = true;
+  else if (m.scrollTop < lastTop - 2) follow = false;   // 捲動事件還沒送到也先判斷一次
+  if (follow){ m.scrollTop = m.scrollHeight; lastTop = m.scrollTop; }
+  $("#jump").style.display = follow ? "none" : "block";
+}
+let lastTop = 0;
+$("#msgs").addEventListener("scroll", () => {
+  const m = $("#msgs");
+  if (m.scrollTop < lastTop - 2) follow = false;                 // 使用者往上捲 → 停止跟隨
+  else if (m.scrollHeight - m.scrollTop - m.clientHeight < 8) follow = true;   // 回到最底 → 恢復
+  lastTop = m.scrollTop;
+  if (follow) $("#jump").style.display = "none";
+  paintOutlineActive();
+});
+$("#msgs").addEventListener("wheel", e => { if (e.deltaY < 0) follow = false; }, {passive:true});
+$("#jump").onclick = () => scrollDown(true);
+
+/* ---------- 右側問題索引（快速回顧） ---------- */
+function rebuildOutline(){
+  const o = $("#outline"); o.innerHTML = "";
+  const qs = [...document.querySelectorAll("#list .msg.user")];
+  o.style.display = qs.length > 1 ? "flex" : "none";
+  qs.forEach((el, i) => {
+    const it = document.createElement("div"); it.className = "oi";
+    const txt = (el.querySelector(".bubble").firstChild?.textContent || "").trim() || "（附件）";
+    it.innerHTML = `<span class="txt"></span><span class="dash"></span>`;
+    it.querySelector(".txt").textContent = `${i + 1}. ${txt.replace(/\s+/g, " ").slice(0, 60)}`;
+    it.title = txt.slice(0, 300);
+    it.onclick = () => {
+      const m = $("#msgs");
+      follow = false;
+      m.scrollTo({top: el.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop - 12, behavior:"smooth"});
+      $("#jump").style.display = "block";
+    };
+    o.appendChild(it);
+  });
+  paintOutlineActive();
+}
+function paintOutlineActive(){
+  const m = $("#msgs"), qs = [...document.querySelectorAll("#list .msg.user")], items = $("#outline").children;
+  let cur = 0;
+  const top = m.getBoundingClientRect().top;
+  qs.forEach((el, i) => { if (el.getBoundingClientRect().top - top <= 80) cur = i; });
+  [...items].forEach((it, i) => it.classList.toggle("active", i === cur));
+}
+
+function addUser(text, files){
+  clearEmpty();
+  const d = document.createElement("div"); d.className = "msg user";
+  const b = document.createElement("div"); b.className = "bubble";
+  b.textContent = text;
+  for (const f of files || []){
+    if (isImg(f)){ const i = document.createElement("img"); i.className = "thumb"; i.src = fileUrl(f); b.appendChild(i); }
+    else { const t = document.createElement("a"); t.className = "filetag"; t.href = fileUrl(f); t.target = "_blank"; t.textContent = "📄 " + baseName(f); b.appendChild(t); }
+  }
+  d.appendChild(b); $("#list").appendChild(d); scrollDown(true); rebuildOutline();
+}
+function addAssistant(){
+  clearEmpty();
+  const d = document.createElement("div"); d.className = "msg assistant";
+  d.innerHTML = `<div class="steps"></div><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>`;
+  $("#list").appendChild(d); scrollDown();
+  return { el:d, steps:d.querySelector(".steps"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
+}
+// 送出後到第一個字出現前常有 10~30 秒的空白（CLI 啟動 + 模型思考），顯示狀態與秒數避免看起來像當機
+function startStatus(a){
+  const t0 = Date.now();
+  let phase = "啟動 CLI 中";
+  const paint = () => { a.status.innerHTML = `<span class="spin"></span>${escapeHtml(phase)}… ${Math.floor((Date.now() - t0) / 1000)} 秒`; };
+  a.status.hidden = false; paint();
+  const timer = setInterval(paint, 1000);
+  return {
+    set(p){ phase = p; a.status.hidden = false; paint(); },
+    hide(){ a.status.hidden = true; },
+    end(){ clearInterval(timer); a.status.remove(); }
+  };
+}
+function stepLabel(s){
+  const p = s.params || {};
+  const target = p.AbsolutePath || p.Url || p.url || p.query || p.Query || p.CommandLine || p.SearchPath || p.DirectoryPath || "";
+  return `${s.tool}${target ? "：" + (String(target).length > 80 ? "…" + String(target).slice(-80) : target) : ""}`;
+}
+
+/* ---------- sending ---------- */
+async function send(){
+  if (running) return stop();
+  const text = $("#input").value.trim();
+  if (!text && !pending.length) return;
+  if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
+  const files = pending.map(p => p.path);
+  addUser(text, files);
+  $("#input").value = ""; autoGrow(); pending = []; renderChips();
+
+  const a = addAssistant();
+  const st = startStatus(a);
+  let reply = "", lastRender = 0;
+  setRunning(true);
+  try {
+    const res = await fetch("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({text, files, model:currentModel(),
+                            conversation_id:convId, search:searchOn, project})});
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for(;;){
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0){
+        const line = buf.slice(0, i); buf = buf.slice(i+1);
+        if (!line.trim()) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.event === "run") running = ev.run_id;
+        if (ev.event === "init") st.set("模型思考中");
+        const su = ev.step_update;
+        if (su){
+          if (su.step_type === "agent_response" && su.text_delta){ reply += su.text_delta; st.hide(); }
+          if (su.step_type === "tool" && su.state === "ACTIVE"){
+            const label = stepLabel({tool:su.tool_name, params:(su.tool_info||{}).parameters});
+            const s = document.createElement("div"); s.textContent = label;
+            a.steps.appendChild(s);
+            st.set(su.tool_name === "search_web" ? "上網搜尋中" : su.tool_name === "view_file" ? "讀取檔案中" : "使用工具 " + su.tool_name);
+          }
+          if (su.step_type === "tool" && su.state === "DONE") st.set("模型思考中");
+          if (Date.now() - lastRender > 120){ a.bubble.innerHTML = renderMd(reply); lastRender = Date.now(); scrollDown(); }
+        }
+        if (ev.event === "result"){
+          const r = ev.result || {};
+          if (r.response) reply = r.response;
+          const u = r.usage || {};
+          a.meta.textContent = `${modelLabel(currentModel())} ·${(r.duration_seconds||0).toFixed(1)} 秒 · ${u.total_tokens ?? "?"} tokens`;
+        }
+        if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
+        if (ev.event === "done"){
+          if (ev.conversation_id){ const isNew = !convId; convId = ev.conversation_id; if (isNew) loadHistory(); }
+          if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
+        }
+      }
+    }
+  } catch (e){
+    a.bubble.innerHTML += `<div class="err">連線錯誤：${escapeHtml(String(e))}</div>`;
+  }
+  if (reply) a.bubble.innerHTML = renderMd(reply);
+  else if (!a.bubble.innerHTML) a.bubble.innerHTML = `<div class="err">（已中止或沒有回覆）</div>`;
+  a.bubble.classList.remove("typing");
+  st.end();
+  setRunning(false); scrollDown(); loadHistory(); refreshUsage();
+}
+async function stop(){
+  if (running && running !== true) await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({run_id:running})});
+}
+function setRunning(on){
+  running = on ? true : null;
+  const b = $("#send"); b.textContent = on ? "停止" : "送出"; b.classList.toggle("stop", on);
+}
+const escapeHtml = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- attachments ---------- */
+function renderChips(){
+  const c = $("#chips"); c.innerHTML = "";
+  pending.forEach((p, idx) => {
+    const d = document.createElement("div"); d.className = "chip";
+    d.innerHTML = (p.isImg && p.url ? `<img src="${p.url}">` : "📄") + `<span></span><button title="移除">✕</button>`;
+    d.querySelector("span").textContent = p.uploading ? p.name + "（上傳中）" : p.name;
+    d.querySelector("button").onclick = () => { pending.splice(idx, 1); renderChips(); };
+    c.appendChild(d);
+  });
+  $("#hint").textContent = "";
+}
+function addFiles(list){
+  for (const f of list){
+    const name = f.name && f.name !== "image.png" ? f.name : `paste_${Date.now()}.png`;
+    const item = {name, isImg:isImg(name), uploading:true, url: isImg(name) ? URL.createObjectURL(f) : null};
+    pending.push(item); renderChips();
+    const r = new FileReader();
+    r.onload = async () => {
+      try {
+        const res = await fetch("/api/upload", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name, data:r.result})});
+        const j = await res.json(); item.path = j.path; item.uploading = false;
+      } catch (e){ pending.splice(pending.indexOf(item), 1); $("#hint").textContent = "上傳失敗：" + name; }
+      renderChips();
+    };
+    r.readAsDataURL(f);
+  }
+}
+$("#attach").onclick = () => $("#fileIn").click();
+$("#fileIn").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+$("#input").addEventListener("paste", e => {
+  const fs = [...(e.clipboardData?.files || [])];
+  if (fs.length){ e.preventDefault(); addFiles(fs); }
+});
+const box = $("#box");
+["dragenter","dragover"].forEach(t => document.addEventListener(t, e => { e.preventDefault(); box.classList.add("drag"); }));
+["dragleave","drop"].forEach(t => document.addEventListener(t, e => { e.preventDefault(); if (t === "drop" || !e.relatedTarget) box.classList.remove("drag"); }));
+document.addEventListener("drop", e => { if (!$("#pdlg").open && e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
+
+/* ---------- input ---------- */
+function autoGrow(){ const t = $("#input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; }
+$("#input").addEventListener("input", autoGrow);
+$("#input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); }
+});
+$("#send").onclick = send;
+
+/* ---------- models / settings ---------- */
+// agy 的模型 ID 已經內含思考強度（例如 gemini-3.1-pro-high），不能再另外加 --effort。
+// 這裡把清單拆成「模型家族 + 該家族實際有的強度」，所以選不出無效組合。
+const EFFORT_NAMES = {low:"低 (low)", medium:"中 (medium)", high:"高 (high)"};
+let families = [];   // [{key, name, variants:[{id, level}]}]
+function groupModels(models){
+  const map = new Map();
+  for (const m of models){
+    const mm = m.id.match(/^(.*)-(low|medium|high)$/);
+    const key = mm ? mm[1] : m.id, level = mm ? mm[2] : "";
+    if (!map.has(key)) map.set(key, {key, name:m.name.replace(/\s*\((Low|Medium|High)\)\s*$/, ""), variants:[]});
+    map.get(key).variants.push({id:m.id, level});
+  }
+  return [...map.values()];
+}
+const currentModel = () => $("#effort").value || "";
+const modelLabel = id => { for (const f of families) for (const v of f.variants) if (v.id === id) return f.name + (v.level ? ` · ${v.level}` : ""); return id || ""; };
+function fillEffort(fam, wantId){
+  const sel = $("#effort"); sel.innerHTML = "";
+  for (const v of fam.variants){
+    const o = document.createElement("option"); o.value = v.id;
+    o.textContent = v.level ? EFFORT_NAMES[v.level] : "（此模型不可調）"; sel.appendChild(o);
+  }
+  sel.disabled = fam.variants.length < 2;
+  if (fam.variants.some(v => v.id === wantId)) sel.value = wantId;
+  else { const hi = fam.variants.find(v => v.level === "high"); sel.value = (hi || fam.variants[0]).id; }
+}
+function setModel(id){
+  const fam = families.find(f => f.variants.some(v => v.id === id));
+  if (!fam) return false;
+  $("#family").value = fam.key; fillEffort(fam, id); paintUsage();
+  return true;
+}
+async function loadModels(){
+  const sel = $("#family");
+  try {
+    const j = await (await fetch("/api/models")).json();
+    $("#banner").hidden = !j.error; $("#banner").textContent = j.error ? "⚠ " + j.error : "";
+    families = groupModels(j.models);
+    sel.innerHTML = "";
+    for (const f of families){ const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; sel.appendChild(o); }
+    if (!families.length){ sel.innerHTML = `<option value="">（取不到模型清單，用預設）</option>`; return; }
+    if (!setModel(store.get("model", "gemini-3.1-pro-high"))) setModel(families[0].variants[0].id);
+  } catch { sel.innerHTML = `<option value="">（伺服器未回應）</option>`; }
+}
+$("#family").onchange = e => {
+  const fam = families.find(f => f.key === e.target.value);
+  fillEffort(fam, null); store.set("model", currentModel()); paintUsage();
+};
+$("#effort").onchange = () => { store.set("model", currentModel()); paintUsage(); };
+$("#settingsBtn").onclick = async () => {
+  $("#instr").value = (await (await fetch("/api/settings")).json()).instructions || "";
+  $("#dlg").showModal();
+};
+$("#dlgCancel").onclick = () => $("#dlg").close();
+$("#dlgSave").onclick = async () => {
+  await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({instructions:$("#instr").value})});
+  $("#dlg").close();
+};
+
+/* ---------- web search toggle ---------- */
+let searchOn = store.get("search", "0") === "1";
+function paintSearch(){ $("#searchBtn").classList.toggle("on", searchOn); }
+$("#searchBtn").onclick = () => { searchOn = !searchOn; store.set("search", searchOn ? "1" : "0"); paintSearch(); };
+paintSearch();
+
+/* ---------- usage ---------- */
+let usage = null;
+const groupOf = id => /^gemini/i.test(id || "") ? 0 : 1;   // agy /usage：Gemini 一組，Claude/GPT 一組
+const pct = f => Math.round((f ?? 0) * 100);
+const localTime = s => new Date(s).toLocaleString("zh-TW", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false});
+async function refreshUsage(){
+  try {
+    const j = await (await fetch("/api/usage")).json();
+    if (j.groups) usage = j;
+  } catch {}
+  paintUsage();
+}
+function paintUsage(){
+  const chip = $("#usageChip");
+  if (!usage){ chip.textContent = "用量"; return; }
+  const g = usage.groups[groupOf(currentModel())] || usage.groups[0];
+  const b = Object.fromEntries(g.buckets.map(x => [x.window, x]));
+  chip.textContent = `用量 5h ${pct(b["5h"]?.remaining_fraction)}% · 週 ${pct(b.weekly?.remaining_fraction)}%`;
+  chip.title = `${g.name}：剩餘額度（點開看詳細）`;
+  if ($("#udlg").open) paintUsageDialog();
+}
+function paintUsageDialog(){
+  const body = $("#ubody");
+  if (!usage){ body.textContent = "讀取失敗，請按重新整理。"; return; }
+  const cur = groupOf(currentModel());
+  body.innerHTML = "";
+  usage.groups.forEach((g, gi) => {
+    const d = document.createElement("div"); d.className = "ugroup";
+    d.innerHTML = `<h4></h4><div class="d"></div>`;
+    d.querySelector("h4").textContent = g.name + (gi === cur ? "（目前模型）" : "");
+    d.querySelector(".d").textContent = g.description || "";
+    for (const b of g.buckets){
+      const p = pct(b.remaining_fraction);
+      const x = document.createElement("div"); x.className = "ubar";
+      x.innerHTML = `<div class="l"><span></span><b>${p}%</b></div><div class="t"><div class="f${p < 20 ? " low" : ""}" style="width:${p}%"></div></div><div class="r"></div>`;
+      x.querySelector("span").textContent = b.window === "5h" ? "5 小時額度" : b.window === "weekly" ? "每週額度" : b.name;
+      x.querySelector(".r").textContent = `完全恢復時間：${localTime(b.reset_time)}`;
+      d.appendChild(x);
+    }
+    body.appendChild(d);
+  });
+  if (usage.description){ const n = document.createElement("p"); n.className = "meta"; n.textContent = usage.description; body.appendChild(n); }
+}
+$("#usageChip").onclick = () => { paintUsageDialog(); $("#udlg").showModal(); refreshUsage(); };
+$("#uRefresh").onclick = () => { $("#ubody").textContent = "讀取中…"; refreshUsage(); };
+$("#uClose").onclick = () => $("#udlg").close();
+
+/* ---------- 共用：改名 ---------- */
+const post = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)}).then(r => r.json());
+// 把清單項目的標題換成輸入框；Enter / 點別處儲存，Esc 取消
+function inlineRename(item, current, save){
+  const span = item.querySelector("span");
+  const inp = document.createElement("input"); inp.value = current;
+  span.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const finish = async ok => {
+    if (done) return; done = true;
+    const v = inp.value.trim();
+    if (ok && v && v !== current) await save(v);
+    inp.replaceWith(span); if (ok && v) span.textContent = v;
+  };
+  inp.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); finish(true); } if (e.key === "Escape") finish(false); };
+  inp.onblur = () => finish(true);
+  inp.onclick = e => e.stopPropagation();
+}
+function listItem(label, active, buttons){
+  const d = document.createElement("div"); d.className = "hitem" + (active ? " active" : "");
+  d.innerHTML = `<span></span>`;
+  d.querySelector("span").textContent = label;
+  for (const [icon, title, fn] of buttons){
+    const b = document.createElement("button"); b.textContent = icon; b.title = title;
+    b.onclick = ev => { ev.stopPropagation(); fn(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+/* ---------- 專案 ---------- */
+let project = store.get("project", "");   // 目前所在專案 id；"" = 一般對話
+let projects = [];
+const curProject = () => projects.find(p => p.id === project) || null;
+async function loadProjects(){
+  projects = (await (await fetch("/api/projects")).json()).items;
+  if (project && !curProject()) { project = ""; store.set("project", ""); }
+  const box = $("#projs"); box.innerHTML = "";
+  box.appendChild(Object.assign(listItem("💬 一般對話", !project, []), {onclick: () => switchProject("")}));
+  for (const p of projects){
+    const d = listItem("📁 " + p.name, p.id === project, [
+      ["⚙", "管理檔案與指示", () => { switchProject(p.id); openProjectDialog(); }],
+      ["✎", "改名", () => inlineRename(d, p.name, v => post("/api/project/update", {id:p.id, name:v.replace(/^📁\s*/, "")}).then(loadProjects))],
+      ["🗑", "刪除專案", async () => {
+        if (!confirm(`刪除專案「${p.name}」？\n\n專案裡上傳的 ${p.file_count} 個檔案會被刪除；這個專案的對話紀錄會移到「一般對話」。`)) return;
+        await post("/api/project/delete", {id:p.id});
+        if (p.id === project) switchProject(""); else loadProjects();
+      }],
+    ]);
+    d.querySelector("span").textContent = "📁 " + p.name;
+    const c = document.createElement("span"); c.className = "cnt"; c.textContent = p.file_count ? `${p.file_count} 檔` : "";
+    d.insertBefore(c, d.querySelector("button"));
+    d.onclick = () => switchProject(p.id);
+    d.ondblclick = () => inlineRename(d, p.name, v => post("/api/project/update", {id:p.id, name:v.replace(/^📁\s*/, "")}).then(loadProjects));
+    box.appendChild(d);
+  }
+  paintProjectChip();
+}
+function paintProjectChip(){
+  const p = curProject(), chip = $("#projChip");
+  chip.style.display = p ? "inline-block" : "none";
+  if (p) chip.textContent = `📁 ${p.name} · ${p.file_count} 份檔案`;
+  $("#histLabel").textContent = p ? `「${p.name}」的對話` : "一般對話";
+}
+function switchProject(id, keepConv){
+  if (running) return;
+  project = id || ""; store.set("project", project);
+  if (!keepConv) newConv(); else loadHistory();
+  loadProjects();
+}
+$("#newProj").onclick = async () => {
+  const name = prompt("新專案名稱（例如：Qubit papers、電動力學）", "");
+  if (name === null) return;
+  const p = await post("/api/project/create", {name: name.trim() || "新專案"});
+  await loadProjects(); switchProject(p.id); openProjectDialog();
+};
+
+/* 專案設定對話框：名稱、指示、檔案 */
+async function openProjectDialog(){
+  const p = curProject(); if (!p) return;
+  const full = await (await fetch("/api/projects/" + p.id)).json();
+  $("#pname").value = full.name; $("#pinstr").value = full.instructions || "";
+  paintMemory(full);
+  paintProjectFiles(full.files);
+  if (!$("#pdlg").open) $("#pdlg").showModal();
+}
+function paintProjectFiles(files){
+  const box = $("#pfiles"); box.innerHTML = "";
+  if (!files.length){ box.innerHTML = `<div class="pfempty">還沒有檔案。按「＋ 上傳檔案」或把 PDF 拖進這個框框。</div>`; return; }
+  for (const f of files){
+    const r = document.createElement("div"); r.className = "pf";
+    r.innerHTML = `<span>📄</span><a target="_blank"></a><span class="s"></span><button title="從專案移除">🗑</button>`;
+    r.querySelector("a").textContent = f.name; r.querySelector("a").href = fileUrl(f.path);
+    r.querySelector(".s").textContent = f.size_text;
+    r.querySelector("button").onclick = async () => {
+      if (!confirm(`從專案刪除「${f.name}」？`)) return;
+      await post("/api/project/delete_file", {id:project, name:f.name});
+      openProjectDialog(); loadProjects();
+    };
+    box.appendChild(r);
+  }
+}
+async function uploadProjectFiles(list){
+  const box = $("#pfiles"), files = [...list];
+  for (const [i, f] of files.entries()){
+    box.querySelector(".pfempty")?.remove();
+    const note = document.createElement("div"); note.className = "pfempty";
+    note.textContent = `上傳中（${i + 1}/${files.length}）：${f.name}`; box.appendChild(note);
+    const data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(f); });
+    await post("/api/project/upload", {id:project, name:f.name, data});
+    note.remove();
+  }
+  await openProjectDialog(); loadProjects();
+}
+$("#pUpload").onclick = () => $("#pfileIn").click();
+$("#pfileIn").onchange = e => { uploadProjectFiles(e.target.files); e.target.value = ""; };
+const pf = $("#pfiles");
+["dragenter","dragover"].forEach(t => pf.addEventListener(t, e => { e.preventDefault(); e.stopPropagation(); pf.classList.add("drag"); }));
+pf.addEventListener("dragleave", () => pf.classList.remove("drag"));
+pf.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); pf.classList.remove("drag"); if (e.dataTransfer?.files?.length) uploadProjectFiles(e.dataTransfer.files); });
+$("#pClose").onclick = () => $("#pdlg").close();
+$("#pSave").onclick = async () => {
+  await post("/api/project/update", {id:project, name:$("#pname").value, instructions:$("#pinstr").value,
+                                      memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked});
+  $("#pdlg").close(); loadProjects();
+};
+function paintMemory(p){
+  $("#pmem").value = p.memory || "";
+  $("#pmemAuto").checked = p.memory_auto !== false;
+  $("#pmemInfo").textContent = p.memory_updated ? "上次更新：" + new Date(p.memory_updated * 1000).toLocaleString("zh-TW", {hour12:false}) : "";
+}
+$("#pmemRebuild").onclick = async () => {
+  if ($("#pmem").value.trim() && !confirm("會讀這個專案的所有對話，重新整理記憶（目前的記憶會當作基礎一起參考）。繼續？")) return;
+  const b = $("#pmemRebuild"); b.disabled = true; b.textContent = "整理中…（約 10～60 秒）";
+  try {
+    const r = await post("/api/project/rebuild_memory", {id:project});
+    if (r.ok) paintMemory(r); else alert(r.message);
+  } finally { b.disabled = false; b.textContent = "從所有對話重建"; }
+};
+
+/* ---------- 版本與更新 ---------- */
+let updInfo = null;
+async function checkUpdate(force){
+  try {
+    const v = await (await fetch("/api/version")).json();
+    $("#verText").textContent = "v" + v.version;
+    updInfo = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
+  } catch { return; }
+  const b = $("#updBtn");
+  b.hidden = !updInfo.available;
+  if (updInfo.available) b.textContent = `⬆ 有新版本 v${updInfo.latest}`;
+  if (force){
+    if (updInfo.available) openUpdateDialog();
+    else alert(updInfo.error || `已經是最新版（v${updInfo.current}）。`);
+  }
+}
+function openUpdateDialog(){
+  $("#updTitle").textContent = `有新版本 v${updInfo.latest}（目前 v${updInfo.current}）`;
+  $("#updBody").innerHTML = updInfo.notes ? renderMd(updInfo.notes) : "（沒有更新說明）";
+  $("#updGo").disabled = false; $("#updGo").textContent = "更新"; $("#updLater").disabled = false;
+  $("#updlg").showModal();
+}
+$("#updBtn").onclick = openUpdateDialog;
+$("#checkUpd").onclick = e => { e.preventDefault(); checkUpdate(true); };
+$("#updLater").onclick = () => $("#updlg").close();
+$("#updGo").onclick = async () => {
+  if (running){ alert("還有回覆在生成中，等它完成再更新。"); return; }
+  const go = $("#updGo"); go.disabled = true; $("#updLater").disabled = true;
+  go.textContent = "下載並安裝中…";
+  const before = (await (await fetch("/api/version")).json()).boot;
+  let r;
+  try { r = await post("/api/update/install", {}); }
+  catch (e){ r = {ok:false, message:String(e)}; }
+  if (!r.ok){ alert(r.message); $("#updlg").close(); return; }
+  go.textContent = "重新啟動中…";
+  // 等新的伺服器起來（boot id 會變）再重新載入頁面
+  for (let i = 0; i < 60; i++){
+    await new Promise(ok => setTimeout(ok, 1000));
+    try { const v = await (await fetch("/api/version")).json(); if (v.boot !== before){ location.reload(); return; } } catch {}
+  }
+  alert("新版已經裝好，但伺服器沒有自動重新啟動。請雙擊「啟動.vbs」。");
+};
+$("#projChip").onclick = openProjectDialog;
+
+/* ---------- history ---------- */
+async function loadHistory(){
+  const j = await (await fetch("/api/history?project=" + encodeURIComponent(project))).json();
+  const h = $("#hist"); h.innerHTML = "";
+  for (const it of j.items){
+    const d = listItem(it.title || "（未命名）", it.id === convId, [
+      ["✎", "改名", () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}))],
+      ["🗑", "刪除", async () => {
+        if (!confirm("刪除這筆對話紀錄？")) return;
+        await post("/api/delete", {id:it.id});
+        if (it.id === convId) newConv(); else loadHistory();
+      }],
+    ]);
+    d.onclick = () => openConv(it.id);
+    d.ondblclick = () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}));
+    h.appendChild(d);
+  }
+  if (!j.items.length) h.innerHTML = `<div class="pfempty">還沒有對話</div>`;
+}
+async function openConv(id){
+  if (running) return;
+  const h = await (await fetch("/api/history/" + id)).json();
+  if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
+  convId = id; $("#list").innerHTML = "";
+  for (const m of h.messages){
+    if (m.role === "user") addUser(m.text, m.files);
+    else {
+      const a = addAssistant(); a.bubble.classList.remove("typing");
+      (m.steps || []).forEach(s => { const x = document.createElement("div"); x.textContent = stepLabel(s); a.steps.appendChild(x); });
+      a.bubble.innerHTML = renderMd(m.text);
+    }
+  }
+  if (h.model) setModel(h.model);
+  $("#side").classList.remove("open"); loadHistory();
+}
+function emptyState(){
+  const p = curProject();
+  if (!p) return `<div id="empty"><h2>Antigravity CLI</h2><p>輸入問題，或把 PDF / 圖片拖進來、直接 Ctrl+V 貼上截圖。</p></div>`;
+  return `<div id="empty"><h2>📁 ${escapeHtml(p.name)}</h2>
+    <div class="projcard">${p.file_count ? `專案裡有 <b>${p.file_count}</b> 份檔案，直接提問即可，模型會自己挑需要的檔案讀，並註明出處。`
+      : `這個專案還沒有檔案。先上傳論文或講義，之後的提問都能引用它們。`}<br>
+      ${p.memory ? `🧠 已有專案記憶（${p.memory.split("\n").filter(l => /^\s*[-*]/.test(l)).length} 條重點），新對話會記得之前討論過的內容。<br>` : ""}
+      <button onclick="openProjectDialog()">管理檔案與指示</button></div></div>`;
+}
+function newConv(){
+  if (running) return;
+  convId = null;
+  $("#list").innerHTML = emptyState();
+  $("#side").classList.remove("open"); loadHistory(); rebuildOutline(); $("#input").focus();
+}
+$("#newBtn").onclick = newConv;
+$("#toggleSide").onclick = () => $("#side").classList.toggle("open");
+
+loadModels().then(refreshUsage);
+loadProjects().then(() => { if (!convId && $("#empty")) $("#list").innerHTML = emptyState(); });
+loadHistory(); checkUpdate(false); $("#input").focus();
+</script>
+</body>
+</html>

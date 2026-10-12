@@ -1,0 +1,11 @@
+# 個人資料：對話紀錄、專案與上傳的檔案、設定、log —— 絕對不能進版本控制
+data/
+
+# 更新時的暫存、發布產物、分享用的壓縮檔
+update/
+dist/
+share.zip
+
+# Python
+__pycache__/
+*.py[cod]
