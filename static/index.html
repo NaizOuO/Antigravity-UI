@@ -60,6 +60,20 @@ button{cursor:pointer}
 .memrow button{border:1px solid var(--border);background:none;border-radius:6px;padding:3px 10px;font-size:13px}
 #pmemInfo,#pmemCount,#ptrans{color:var(--muted);font-size:12px}
 #pmemCount.over{color:var(--danger);font-weight:600}
+/* 重問 / 編輯 */
+.acts{display:flex;gap:4px;margin-top:4px;min-height:24px}
+.msg.user .acts{justify-content:flex-end;visibility:hidden}
+.msg.user:hover .acts{visibility:visible}
+.acts button{border:1px solid transparent;background:none;color:var(--muted);font-size:12.5px;border-radius:6px;padding:1px 8px}
+.acts button:hover{border-color:var(--border);color:var(--text)}
+.acts button[hidden]{display:none}
+body.busy .acts{display:none}
+.editor{background:var(--user);border-radius:12px;padding:10px 12px;margin-left:auto;width:min(100%,640px)}
+.editor textarea{width:100%;min-height:60px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);padding:8px;font:inherit;resize:vertical}
+.ednote{font-size:12px;color:var(--muted);margin:4px 0}
+.edbtns{display:flex;justify-content:flex-end;gap:8px}
+.edbtns button{border:1px solid var(--border);background:var(--panel);border-radius:6px;padding:3px 14px}
+.edbtns .s{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 #banner{background:var(--code);border-bottom:1px solid var(--border);border-left:4px solid var(--danger);padding:10px 16px;font-size:14px;white-space:pre-wrap}
 /* 專案管理對話框 */
 #pdlg label.f{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
@@ -337,23 +351,82 @@ function paintOutlineActive(){
   [...items].forEach((it, i) => it.classList.toggle("active", i === cur));
 }
 
-function addUser(text, files){
-  clearEmpty();
-  const d = document.createElement("div"); d.className = "msg user";
-  const b = document.createElement("div"); b.className = "bubble";
+function fillUserBubble(b, text, files){
   b.textContent = text;
   for (const f of files || []){
     if (isImg(f)){ const i = document.createElement("img"); i.className = "thumb"; i.src = fileUrl(f); b.appendChild(i); }
     else { const t = document.createElement("a"); t.className = "filetag"; t.href = fileUrl(f); t.target = "_blank"; t.textContent = "📄 " + baseName(f); b.appendChild(t); }
   }
-  d.appendChild(b); $("#list").appendChild(d); scrollDown(true); rebuildOutline();
+}
+function addUser(text, files){
+  clearEmpty();
+  const d = document.createElement("div"); d.className = "msg user";
+  d._msg = {text, files: files || []};
+  const b = document.createElement("div"); b.className = "bubble";
+  fillUserBubble(b, text, files);
+  const acts = document.createElement("div"); acts.className = "acts";
+  acts.innerHTML = `<button title="修改這則訊息後重新送出">✎ 編輯</button>`;
+  acts.querySelector("button").onclick = () => startEdit(d);
+  d.append(b, acts); $("#list").appendChild(d); scrollDown(true); rebuildOutline();
 }
 function addAssistant(){
   clearEmpty();
   const d = document.createElement("div"); d.className = "msg assistant";
-  d.innerHTML = `<div class="steps"></div><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>`;
+  d.innerHTML = `<div class="steps"></div><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>
+    <div class="acts"><button class="retry" title="用同一個問題重新回答（這則回答會被取代）">↻ 重新回答</button></div>`;
+  d.querySelector(".retry").onclick = () => retryLast(d);
   $("#list").appendChild(d); scrollDown();
   return { el:d, steps:d.querySelector(".steps"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
+}
+
+/* ---------- 重問 / 編輯 ---------- */
+const msgEls = () => [...document.querySelectorAll("#list > .msg")];
+// 「重新回答」只放在最後一則回答上；生成中全部隱藏
+function paintActions(){
+  const all = msgEls(), lastA = all.filter(e => e.classList.contains("assistant")).pop();
+  document.body.classList.toggle("busy", !!running);
+  all.forEach(e => e.querySelector(".retry")?.toggleAttribute("hidden", e !== lastA));
+}
+function truncateFrom(el){            // 把 el 和它之後的訊息從畫面上拿掉，回傳 el 前面還有幾則
+  const all = msgEls(), k = all.indexOf(el);
+  all.slice(k).forEach(e => e.remove());
+  rebuildOutline();
+  return k;
+}
+function retryLast(aEl){
+  if (running) return;
+  const all = msgEls(), u = all[all.indexOf(aEl) - 1];
+  if (!u || !u._msg) return;
+  const {text, files} = u._msg;
+  const keep = truncateFrom(u);
+  runTurn(text, files, convId ? {from: convId, keep} : null);
+}
+function startEdit(uEl){
+  if (running || uEl.querySelector(".editor")) return;
+  const all = msgEls(), later = all.length - all.indexOf(uEl) - 1;
+  const b = uEl.querySelector(".bubble");
+  const ed = document.createElement("div"); ed.className = "editor";
+  ed.innerHTML = `<textarea></textarea>
+    <div class="ednote"></div>
+    <div class="edbtns"><button class="c">取消</button><button class="s">送出</button></div>`;
+  const ta = ed.querySelector("textarea"); ta.value = uEl._msg.text;
+  ed.querySelector(".ednote").textContent = (uEl._msg.files.length ? `附件 ${uEl._msg.files.length} 個會一起重新送出。` : "")
+    + (later ? `送出後，這則之後的 ${later} 則訊息會被新的回答取代。` : "");
+  b.hidden = true; uEl.querySelector(".acts").hidden = true; b.after(ed);
+  ta.focus(); ta.style.height = Math.min(ta.scrollHeight + 4, innerHeight * .4) + "px";
+  const close = () => { ed.remove(); b.hidden = false; uEl.querySelector(".acts").hidden = false; };
+  ed.querySelector(".c").onclick = close;
+  const submit = () => {
+    const text = ta.value.trim();
+    if (!text && !uEl._msg.files.length) return;
+    const files = uEl._msg.files, keep = truncateFrom(uEl);
+    runTurn(text, files, convId ? {from: convId, keep} : null);
+  };
+  ed.querySelector(".s").onclick = submit;
+  ta.onkeydown = e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); submit(); }
+    if (e.key === "Escape") close();
+  };
 }
 // 送出後到第一個字出現前常有 10~30 秒的空白（CLI 啟動 + 模型思考），顯示狀態與秒數避免看起來像當機
 function startStatus(a){
@@ -381,17 +454,21 @@ async function send(){
   if (!text && !pending.length) return;
   if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
   const files = pending.map(p => p.path);
-  addUser(text, files);
   $("#input").value = ""; autoGrow(); pending = []; renderChips();
-
+  runTurn(text, files, null);
+}
+// 送出一輪：一般送出、重新回答、編輯後送出都走這裡（fork = 從哪個對話的第幾則之前分支）
+async function runTurn(text, files, fork){
+  addUser(text, files);
   const a = addAssistant();
   const st = startStatus(a);
+  const wasNew = !convId;
   let reply = "", lastRender = 0;
   setRunning(true);
   try {
     const res = await fetch("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({text, files, model:currentModel(),
-                            conversation_id:convId, search:searchOn, project})});
+                            conversation_id: fork ? null : convId, fork, search:searchOn, project})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -425,7 +502,7 @@ async function send(){
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "done"){
-          if (ev.conversation_id){ const isNew = !convId; convId = ev.conversation_id; if (isNew) loadHistory(); }
+          if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
         }
       }
@@ -438,6 +515,8 @@ async function send(){
   a.bubble.classList.remove("typing");
   st.end();
   setRunning(false); scrollDown(); loadHistory(); refreshUsage();
+  // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
+  if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
 }
 async function stop(){
   if (running && running !== true) await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({run_id:running})});
@@ -445,6 +524,7 @@ async function stop(){
 function setRunning(on){
   running = on ? true : null;
   const b = $("#send"); b.textContent = on ? "停止" : "送出"; b.classList.toggle("stop", on);
+  paintActions();
 }
 const escapeHtml = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -619,7 +699,8 @@ function inlineRename(item, current, save){
   const finish = async ok => {
     if (done) return; done = true;
     const v = inp.value.trim();
-    if (ok && v && v !== current) await save(v);
+    // 輸入框會把換行變成空白：只有內容真的改了（忽略空白）才存，避免點開改名又點掉就被當成手動改名
+    if (ok && v && v.replace(/\s+/g, "") !== current.replace(/\s+/g, "")) await save(v);
     inp.replaceWith(span); if (ok && v) span.textContent = v;
   };
   inp.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); finish(true); } if (e.key === "Escape") finish(false); };
@@ -861,6 +942,7 @@ async function openConv(id){
     }
   }
   if (h.model) setModel(h.model);
+  paintActions();
   $("#side").classList.remove("open"); loadHistory();
 }
 function emptyState(){

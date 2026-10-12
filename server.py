@@ -413,14 +413,102 @@ def load_hist(cid):
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
-def save_turn(cid, model, user_msg, reply, project=None):
-    h = load_hist(cid) or {"id": cid, "title": (user_msg["text"] or "（附件）")[:40],
-                           "created": time.time(), "messages": [], "project": project}
-    h["model"] = model
-    h["updated"] = time.time()
-    h["messages"] += [user_msg, reply]
-    hist_path(cid).write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
+HIST_LOCK = threading.Lock()      # 背景產生標題和存對話可能同時寫同一個檔
+
+
+def write_hist(h):
+    hist_path(h["id"]).write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
     write_transcript(h)
+
+
+def save_turn(cid, model, user_msg, reply, project=None):
+    with HIST_LOCK:
+        h = load_hist(cid) or {"id": cid, "title": (user_msg["text"] or "（附件）")[:40],
+                               "created": time.time(), "messages": [], "project": project}
+        h["model"] = model
+        h["updated"] = time.time()
+        h["messages"] += [user_msg, reply]
+        write_hist(h)
+
+
+# ---------- 重問 / 編輯：從某則訊息之前分支出新的對話 ----------
+# agy 的非互動模式不能倒回對話，所以把「保留的前半段」整理成背景，開一個新的 agy 對話接著問，
+# 完成後用新對話取代舊的（標題、建立時間、專案沿用）。介面上看到的內容就和模型實際記得的一致。
+def history_block(prior):
+    if not prior:
+        return ""
+    parts = ["[先前的對話] 以下是這段對話到目前為止的內容（使用者修改了後面的訊息或要求重新回答，所以從這裡接續）。"
+             "請把它當成你和使用者之前的對話，接著回答最後的新訊息；需要時可以用 view_file 重新讀附件。"]
+    for m in prior:
+        t = m.get("text") or ""
+        if m["role"] == "assistant" and len(t) > 6000:
+            t = t[:6000] + "…（後略）"
+        line = ("使用者：" if m["role"] == "user" else "AI：") + t
+        if m.get("files"):
+            line += "\n（附件：" + "、".join(m["files"]) + "）"
+        parts.append(line)
+    return "\n\n".join(parts)
+
+
+def save_fork(old, prior, new_cid, model, user_msg, reply):
+    with HIST_LOCK:
+        h = {**{k: old.get(k) for k in ("title", "created", "project", "renamed")},
+             "id": new_cid, "model": model, "updated": time.time(), "messages": prior + [user_msg, reply]}
+        write_hist(h)
+        if old["id"] != new_cid:          # 舊的分支拿掉（連同專案資料夾裡的副本）
+            remove_transcript(old)
+            hist_path(old["id"]).unlink(missing_ok=True)
+
+
+# ---------- 自動標題 ----------
+TITLE_PROMPT = """請幫下面這段對話取一個簡短的標題：繁體中文、6～16 個字、抓住主題。
+不要標點符號、引號、表情符號，也不要「標題：」之類的前綴。只輸出標題本身，不要使用任何工具。
+
+使用者：{q}
+
+AI：{a}
+"""
+
+
+def auto_title(cid, question, answer):
+    """新對話第一輪結束後，在背景用 Flash 產生標題；使用者自己改過名稱的不覆蓋。"""
+    try:
+        t = run_agy_text(TITLE_PROMPT.format(q=question[:1500], a=answer[:1500]), "title")
+    except RuntimeError:
+        return
+    t = t.strip().splitlines()[0].strip(" \"'「」『』*#:：。") if t.strip() else ""
+    if not t:
+        return
+    with HIST_LOCK:
+        h = load_hist(cid)
+        if h and not h.get("renamed"):
+            h["title"], h["auto_titled"] = t[:30], True
+            write_hist(h)
+
+
+FAILED_REPLY = "（已中止或無回覆）"
+
+
+def retitle_legacy(limit=30):
+    """舊版建立的對話標題就是第一則訊息原文：啟動時在背景逐一補上標題（一次最多 limit 個）。
+    標題和原文不同的（使用者自己改過）、手動改名過、回答失敗的都跳過。"""
+    done = 0
+    for p in sorted(HISTORY.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if done >= limit:
+            break
+        try:
+            h = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        msgs = h.get("messages") or []
+        answer = next((m.get("text") for m in msgs if m["role"] == "assistant" and m.get("text") != FAILED_REPLY), None)
+        if h.get("renamed") or h.get("auto_titled") or not msgs or not answer:
+            continue
+        squash = lambda s: re.sub(r"\s+", "", s or "")       # 忽略空白和換行再比對
+        if squash(h.get("title")) != squash((msgs[0].get("text") or "（附件）")[:40]):
+            continue
+        auto_title(h["id"], msgs[0].get("text") or "", answer)
+        done += 1
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -578,13 +666,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if u.path == "/api/rename":
             d = self.body()
-            h = load_hist(d.get("id", ""))
             title = (d.get("title") or "").strip()
-            if not h or not title:
-                return self.send_json({"error": "not found"}, 404)
-            h["title"] = title[:80]
-            hist_path(h["id"]).write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
-            write_transcript(h)
+            with HIST_LOCK:
+                h = load_hist(d.get("id", ""))
+                if not h or not title:
+                    return self.send_json({"error": "not found"}, 404)
+                h["title"], h["renamed"] = title[:80], True     # 手動改過名稱：自動標題不再覆蓋
+                write_hist(h)
             return self.send_json({"ok": True})
         if u.path.startswith("/api/project/"):
             return self.project_action(u.path.rsplit("/", 1)[1], self.body())
@@ -679,6 +767,16 @@ class Handler(BaseHTTPRequestHandler):
         files = [f for f in files if inside(f, ROOT)]
         model, cid = d.get("model"), d.get("conversation_id")
         pr = load_project(d.get("project"))
+        # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
+        fork, old, prior = d.get("fork"), None, []
+        if fork:
+            old = load_hist(fork.get("from") or "")
+            if old:
+                keep = max(0, min(int(fork.get("keep") or 0), len(old["messages"])))
+                prior = old["messages"][:keep - keep % 2]        # 保持「使用者／AI」成對
+                cid = None
+                pr = load_project(old.get("project"))
+        is_new = not cid and not old
         instructions = None
         if not cid:   # 新對話：附上常駐指示（＋專案指示）
             instructions = load_settings()["instructions"]
@@ -687,8 +785,10 @@ class Handler(BaseHTTPRequestHandler):
             if pr and pr.get("memory", "").strip():
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
+            if prior:
+                instructions += "\n\n" + history_block(prior)
         prompt = build_prompt(text + (SEARCH_HINT if d.get("search") else ""), files, instructions,
-                              project_block(pr, cid) if pr else "")
+                              project_block(pr, cid or (old and old["id"])) if pr else "")
         cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json"]
         if model:
             cmd += ["--model", model]
@@ -748,11 +848,15 @@ class Handler(BaseHTTPRequestHandler):
         with RUNS_LOCK:
             RUNS.pop(run_id, None)
 
-        if new_cid and (reply or steps):
-            save_turn(new_cid, model,
-                      {"role": "user", "text": text, "files": files},
-                      {"role": "assistant", "text": reply or "（已中止或無回覆）", "steps": steps},
-                      pr["id"] if pr else None)
+        if new_cid and (reply or steps or old):
+            user_msg = {"role": "user", "text": text, "files": files}
+            reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps}
+            if old:
+                save_fork(old, prior, new_cid, model, user_msg, reply_msg)
+            else:
+                save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None)
+            if (is_new or (old and not prior)) and reply:     # 新對話（或重問第一則）：背景用 Flash 取標題
+                threading.Thread(target=auto_title, args=(new_cid, text, reply), daemon=True).start()
             # 專案對話：背景整理記憶，不影響這次回覆
             if pr and pr.get("memory_auto", True) and reply and proc.returncode == 0:
                 threading.Thread(target=update_memory, args=(pr["id"], turn_material(text, reply)),
@@ -806,6 +910,7 @@ def main():
         return
     SERVER = srv
     threading.Thread(target=sync_transcripts, daemon=True).start()
+    threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     print(f"Antigravity 介面：{url}")
