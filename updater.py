@@ -26,7 +26,7 @@ RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 ASSET_PREFIX = "Antigravity-UI-"
 MANIFEST = "manifest.json"          # 這一版的程式檔清單（release.py 產生）
 PROTECTED = ("data", "update", ".git")   # 這些資料夾裡的東西更新時絕對不動
-CHECK_TTL = 30 * 60                 # 檢查結果快取 30 分鐘
+CHECK_TTL = 5 * 60                  # 檢查結果快取 5 分鐘（重新整理頁面就會再檢查；GitHub 未登入每小時限 60 次）
 
 
 def _get_json(url, timeout=10):

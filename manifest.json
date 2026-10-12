@@ -1,9 +1,9 @@
 {
- "version": "1.2.0",
+ "version": "1.2.1",
  "files": {
-  "server.py": "9bd44a7bf66bad5552d5307fa47a3b8e55df29aa0d273f044f5b5f7db119c762",
-  "version.py": "24894984286d1e44355ed6eb4e3e39fef610ac34b93d2fa2de1f685de105cd8d",
-  "updater.py": "897f802aa96890c04b62137efe0b3c34716f9f91d123360527c3fa8c763634e4",
+  "server.py": "a3d53d03a0ab3fad6545b852a85fbfa790c40cc2895261a2c0804886d9aaada8",
+  "version.py": "9995e095e3bfa97b60419df3526f9d7497cd95df991a53ceca74935902d3ec36",
+  "updater.py": "bb6e7594d3f2eb0cb8a7f3adbba26d0ea46509a33d3bbc4273209fcdea0954e8",
   "static/index.html": "6ae032c80c374bbc21ef097f58c0a0e1c93b79e120c4a5886eb5366577e90cc7",
   "static/icon.png": "7c66719fe91b5c63ee1905c285b19bfd8314a2d5594a669a095c48dc1f84f291",
   "static/icon.ico": "35f6f56ccaaa0955ee91685e470fda30a78c364fac9e9d00cb93b681f9ecb903",

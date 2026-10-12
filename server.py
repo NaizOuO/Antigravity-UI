@@ -24,6 +24,7 @@ import version
 BOOT_ID = uuid.uuid4().hex[:8]     # 每次啟動不同；網頁用它判斷伺服器是否已經重啟
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("AGUI_PORT") or 8765)   # AGUI_PORT：開發測試用
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")   # 只接受用這些名稱連進來的請求
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 DATA = ROOT / "data"               # 所有個人資料都在這裡，分享時不要附上
@@ -448,16 +449,34 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
+    @staticmethod
+    def _is_self(netloc):
+        """netloc（例如 127.0.0.1:8765）是不是指向這個伺服器本身。"""
+        try:
+            p = urlparse("//" + netloc)
+            return p.hostname in LOCAL_HOSTS and p.port in (PORT, None)
+        except ValueError:
+            return False
+
+    def host_ok(self):
+        # 防 DNS rebinding：惡意網站把自己的網域解析到 127.0.0.1 時，Host 會是它的網域，一律拒絕
+        if not self._is_self(self.headers.get("Host") or ""):
+            self.send_json({"error": "forbidden host"}, 403)
+            return False
+        return True
+
     def local_only(self):
-        # 只接受本機網頁來的請求，避免其他網站偷呼叫
+        # 只接受這個介面自己的網頁送來的修改請求（其他網站、或本機其他連接埠的網頁都不行）
         origin = self.headers.get("Origin")
-        if origin and urlparse(origin).hostname not in ("127.0.0.1", "localhost"):
+        if origin and not (urlparse(origin).scheme == "http" and self._is_self(urlparse(origin).netloc)):
             self.send_json({"error": "forbidden"}, 403)
             return False
         return True
 
     # ---- GET ----
     def do_GET(self):
+        if not self.host_ok():
+            return
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path in ("/", "/index.html"):
@@ -529,7 +548,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST ----
     def do_POST(self):
-        if not self.local_only():
+        if not self.host_ok() or not self.local_only():
             return
         u = urlparse(self.path)
         if u.path == "/api/upload":
