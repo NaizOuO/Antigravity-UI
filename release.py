@@ -18,7 +18,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
-PROGRAM_FILES = ["server.py", "version.py", "updater.py", "static/index.html", "static/icon.png", "static/icon.ico",
+PROGRAM_FILES = ["server.py", "version.py", "updater.py", "components.py", "static/index.html",
+                 "skills/pdf-document/SKILL.md", "skills/pdf-document/references/packages.md",
+                 "skills/pdf-document/references/notes.typ", "skills/pdf-document/references/report.typ",
+                 "skills/pdf-document/references/slides.typ", "skills/pdf-document/references/letter.typ", "static/icon.png", "static/icon.ico",
                  "啟動.vbs", "關閉.bat", "打包分享.bat", "README.md"] + [
                  f"static/backgrounds/{n}-{t}.jpg" for n in ("wave", "contour", "bloch", "dusk", "field")
                  for t in ("dark", "light")]

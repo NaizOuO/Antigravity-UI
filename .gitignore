@@ -3,6 +3,8 @@ data/
 # AI 產生的檔案、使用者設定與背景圖片
 output/
 setting/
+# 使用者同意後才下載的元件（Typst 等）
+components/
 
 # 更新時的暫存、發布產物、分享用的壓縮檔
 update/

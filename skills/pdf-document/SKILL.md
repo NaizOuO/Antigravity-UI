@@ -1,0 +1,39 @@
+---
+name: pdf-document
+description: >-
+  Use this skill whenever the user asks for a PDF, a printable document, lecture notes (講義／筆記),
+  a report (報告), a formal document or letter (正式文件、信件、履歷), slides (簡報), or asks to
+  "輸出成 PDF". Write the document as a Typst (.typ) source file; the interface compiles it to PDF.
+---
+
+# PDF 文件（Typst）
+
+這個介面會自動把你寫的 `.typ` 檔編譯成 PDF。**你只要寫 `.typ` 檔，不要執行任何指令**（不要 run_command、不要呼叫 typst）。
+
+## 步驟
+1. 依需求選一個模板（見下表），讀對應的範例檔，照它的開頭設定寫。
+2. 用 write_to_file 把完整的 `.typ` 存到使用者指定的 output 資料夾，檔名有意義（可以中文），副檔名 `.typ`。
+3. 回覆使用者：說明文件內容重點，並告訴他「介面會自動編譯成 PDF」。
+4. 如果之後收到「Typst 編譯錯誤」的訊息，依照錯誤的行號修正同一個檔案（用 replace_file_content 或重新 write_to_file），一樣不要執行指令。
+
+| 用途 | 範例檔 |
+|---|---|
+| 講義、課堂筆記、讀書整理 | [references/notes.typ](references/notes.typ) |
+| 報告、實驗報告、正式文件 | [references/report.typ](references/report.typ) |
+| 簡報 | [references/slides.typ](references/slides.typ) |
+| 信件、申請書、履歷等短文件 | [references/letter.typ](references/letter.typ) |
+
+## 寫作規範（讓重點清楚）
+- 開頭先放 3～5 點「重點摘要」。
+- 定義、定理、例題、注意事項用範例檔裡的框（`#definition`、`#theorem`、`#example`、`#note`、`#warning`），不要整段純文字。
+- 重要公式獨立一行並編號（`$ ... $ <eq:名稱>`），公式下方條列每個變數的意義與單位；用 `@eq:名稱` 引用。
+- 每節結尾一段「本節重點」。
+- 圖：電路用 zap、流程圖用 fletcher、能階圖／座標圖／幾何用 cetz（範例檔裡有用法）。不要嵌入網路圖片。
+- 最後列出參考資料（使用者給的檔名、頁碼、網址）。
+
+## Typst 語法提醒（最常寫錯的地方）
+- 數學：`$x^2$` 行內；`$ x^2 $`（前後有空格）獨立一行。分數 `a/b` 或 `frac(a, b)`，希臘字母直接寫 `alpha`、`hbar`、`omega_r`。
+- Dirac 符號用 physica：`#import "@preview/physica:VERSION": *` 後寫 `$ket(psi)$`、`$bra(phi)$`、`$braket(phi, psi)$`。
+- 多個字母的變數要加引號或空格：`$E_"C"$`、`$E_C$`（單字母可以）。
+- 中文直接寫，不需要特別處理；不要用 LaTeX 指令（`\frac`、`\section`）。
+- 套件版本：只能用 [references/packages.md](references/packages.md) 列出的版本，不能自己猜。

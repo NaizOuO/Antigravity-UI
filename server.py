@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import components
 import updater
 import version
 
@@ -182,6 +183,54 @@ def clean_agy_storage():
             shutil.rmtree(d, ignore_errors=True)
             removed += 1
     return removed
+
+
+# ---------- Skills：程式附帶的 skills/ 同步到每個 agy 工作資料夾的 .agents/skills/ ----------
+SKILLS_SRC = ROOT / "skills"
+
+
+def sync_skills(target):
+    """agy 只會讀工作資料夾裡的 .agents/skills：把程式附帶的 skill 複製進去（更新後也會換成新版）。"""
+    import shutil
+    if not SKILLS_SRC.is_dir():
+        return
+    dest = Path(target) / ".agents" / "skills"
+    for skill in SKILLS_SRC.iterdir():
+        if skill.is_dir():
+            shutil.rmtree(dest / skill.name, ignore_errors=True)
+            shutil.copytree(skill, dest / skill.name)
+
+
+def sync_all_skills():
+    sync_skills(WORK)
+    for p in PROJECTS.iterdir():
+        if p.is_dir():
+            sync_skills(p)
+
+
+# ---------- PDF：AI 寫好 .typ，伺服器編譯（AI 不需要執行任何指令） ----------
+INSTALLING = {}                    # 元件 id -> 取消用的 Event
+
+
+def new_typ_files(since):
+    return sorted(p for p in OUTPUT.glob("*.typ") if p.stat().st_mtime >= since - 2)
+
+
+def compile_files(paths):
+    """編譯多個 .typ：[{typ, ok, pdf | error}]。只接受 output 資料夾裡的 .typ。"""
+    results = []
+    for p in map(Path, paths):
+        if p.suffix.lower() != ".typ" or not p.is_file() or not inside(p, OUTPUT):
+            continue
+        ok, res = components.compile_typst(p)
+        results.append({"typ": str(p), "name": p.name, "ok": ok,
+                        **({"pdf": str(res), "pdf_name": Path(res).name} if ok else {"error": str(res)})})
+    return results
+
+
+def pdf_links(results):
+    ok = [r for r in results if r["ok"]]
+    return "\n".join(f"📄 已產生 PDF：[{r['pdf_name']}](file:///{quote(Path(r['pdf']).as_posix(), safe=':/')})" for r in ok)
 
 
 # ---------- 匯出、備份、匯入 ----------
@@ -931,6 +980,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "not found"}, 404)
         if u.path == "/api/agy_storage":
             return self.send_json(agy_storage())
+        if u.path == "/api/components":
+            return self.send_json(components.status())
         if u.path == "/api/folders":
             return self.send_json({k: str(v) for k, v in FOLDERS.items()})
         if u.path == "/api/shortcut":
@@ -1051,6 +1102,30 @@ class Handler(BaseHTTPRequestHandler):
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_front(folder)
             return self.send_json({"ok": True, "path": str(folder)})
+        if u.path == "/api/components/install":
+            return self.install_component(self.body().get("id"))
+        if u.path == "/api/components/cancel":
+            ev = INSTALLING.get(self.body().get("id"))
+            if ev:
+                ev.set()
+            return self.send_json({"ok": True})
+        if u.path == "/api/components/remove":
+            cid = self.body().get("id")
+            if cid in components.COMPONENTS and cid not in INSTALLING:
+                components.remove(cid)
+            return self.send_json({"ok": True, **components.status()})
+        if u.path == "/api/typst/compile":       # 剛裝好 Typst：把等著的 .typ 編譯掉
+            if not components.installed("typst"):
+                return self.send_json({"ok": False, "message": "Typst 還沒安裝"})
+            d = self.body()
+            results = compile_files(d.get("files") or [])
+            if d.get("conversation_id") and any(r["ok"] for r in results):
+                with HIST_LOCK:             # 把 PDF 連結補進那段對話的最後一則回答
+                    h = load_hist(d["conversation_id"])
+                    if h and h["messages"] and h["messages"][-1]["role"] == "assistant":
+                        h["messages"][-1]["text"] = h["messages"][-1]["text"].rstrip() + "\n\n" + pdf_links(results)
+                        write_hist(h)
+            return self.send_json({"ok": True, "results": results, "links": pdf_links(results)})
         if u.path == "/api/suggest":
             d = self.body()
             try:
@@ -1096,6 +1171,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "message": f"建立捷徑失敗：{e}"})
         self.send_json({"error": "not found"}, 404)
 
+    def install_component(self, cid):
+        """下載安裝元件，用串流回報進度（介面上的卡片會即時顯示）。"""
+        if cid not in components.COMPONENTS:
+            return self.send_json({"ok": False, "message": "不認得的元件"})
+        if cid in INSTALLING:
+            return self.send_json({"ok": False, "message": "已經在下載中"})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.end_headers()
+        cancel = INSTALLING[cid] = threading.Event()
+        last = [0.0]
+
+        def emit(obj):
+            try:
+                self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except OSError:
+                cancel.set()                 # 頁面關掉了：停止下載
+
+        def progress(done, total, msg=""):
+            if time.time() - last[0] > 0.3 or done >= total:
+                last[0] = time.time()
+                emit({"event": "progress", "done": done, "total": total, "msg": msg})
+        try:
+            components.install(cid, progress, cancel)
+            emit({"event": "done", "ok": True})
+        except components.Cancelled:
+            emit({"event": "done", "ok": False, "cancelled": True, "message": "已取消下載"})
+        except Exception as e:
+            emit({"event": "done", "ok": False, "message": f"安裝失敗：{e}"})
+        finally:
+            INSTALLING.pop(cid, None)
+
     def install_update(self):
         with RUNS_LOCK:
             busy = any(p.poll() is None for p in RUNS.values())
@@ -1119,6 +1227,7 @@ class Handler(BaseHTTPRequestHandler):
             pr = {"id": uuid.uuid4().hex[:12], "name": (d.get("name") or "新專案").strip()[:60],
                   "instructions": "", "created": time.time()}
             save_project(pr)
+            sync_skills(proj_dir(pr["id"]))
             return self.send_json(pr)
         pr = load_project(d.get("id"))
         if not pr:
@@ -1302,6 +1411,16 @@ class Handler(BaseHTTPRequestHandler):
                 reply = re.sub(r"!\[[^\]]*\]\([^)]*" + re.escape(p.stem) + r"[^)]*\)\n?", "", reply)
             reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到 output：{names}"
             emit({"event": "images", "paths": [str(p) for p in images], "reply": reply})
+        # PDF：這輪 AI 在 output 寫了 .typ → 有 Typst 就編譯；沒有就請介面詢問要不要下載
+        typs = new_typ_files(started) if returncode == 0 else []
+        if typs and components.installed("typst"):
+            results = compile_files(typs)
+            if any(r["ok"] for r in results):
+                reply = reply.rstrip() + "\n\n" + pdf_links(results)
+            emit({"event": "pdf", "results": results, "reply": reply})
+        elif typs:
+            emit({"event": "need_component", "id": "typst", "info": components.status()["typst"],
+                  "files": [str(p) for p in typs]})
         if new_cid and (reply or steps or old):
             user_msg = {"role": "user", "text": text, "files": files}
             reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps}
@@ -1378,6 +1497,7 @@ def main():
         return
     SERVER = srv
     threading.Thread(target=sync_transcripts, daemon=True).start()
+    threading.Thread(target=sync_all_skills, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()

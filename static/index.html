@@ -215,6 +215,20 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 #sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
 .slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
 .slider[hidden]{display:none}
+/* 元件下載的詢問卡片 */
+.permcard{border:1px solid color-mix(in srgb,var(--accent) 45%,var(--border));background:color-mix(in srgb,var(--panel) 92%,transparent);border-radius:12px;padding:12px 16px;margin:8px 0;max-width:620px}
+.permcard .ph{font-weight:700;margin-bottom:4px}
+.permcard .ph.muted{color:var(--muted)}
+.permcard p{margin:4px 0}
+.permcard ul{margin:6px 0 10px;padding-left:20px;font-size:13.5px;color:var(--muted)}
+.pbtns{display:flex;gap:8px}
+.pbtns button,.pprog button{border:1px solid var(--border);background:var(--panel);border-radius:8px;padding:5px 16px}
+.pbtns .primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
+.pprog{display:flex;align-items:center;gap:10px;font-size:13px}
+.pprog[hidden],.pbtns[hidden]{display:none}
+.pprog .bar{flex:1;height:8px;border-radius:4px;background:var(--code);overflow:hidden}
+.pprog .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.pprog .ptxt{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
 #box.has-sug #input::placeholder{color:color-mix(in srgb,var(--accent) 55%,var(--muted));font-style:italic}
 .bubble img.genimg{max-width:100%;border-radius:10px;border:1px solid var(--border);display:block;margin:8px 0;cursor:zoom-in}
 /* 設定：文字大小、對話寬度 */
@@ -454,6 +468,11 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>資料夾</b><span class="sp"></span><button data-folder="output">輸出</button><button data-folder="setting">設定</button><button data-folder="data">資料</button></div>
       <p class="note">output、setting、data 都是你的個人資料，更新時不會被動到。</p>
     </section>
+    <section data-title="元件">
+      <h4>元件</h4>
+      <p class="note">需要時才下載的工具。用到時會先在對話裡詢問；也可以在這裡先安裝或移除。元件放在主目錄的 components 資料夾，不會被更新覆蓋。</p>
+      <div id="compList"></div>
+    </section>
     <section data-title="更新與關於">
       <h4>更新與關於</h4>
       <div class="srow"><b>開啟時檢查新版本</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="update_check"><i></i></label></div>
@@ -685,7 +704,8 @@ async function send(){
   runTurn(text, files, null);
 }
 // 送出一輪：一般送出、重新回答、編輯後送出都走這裡（fork = 從哪個對話的第幾則之前分支）
-async function runTurn(text, files, fork){
+async function runTurn(text, files, fork, fixDepth = 0){
+  let pdfFailures = [], needComp = null;
   clearSuggestion();
   addUser(text, files);
   const a = addAssistant();
@@ -731,6 +751,8 @@ async function runTurn(text, files, fork){
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
+        if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); }
+        if (ev.event === "need_component") needComp = ev;
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
@@ -749,7 +771,16 @@ async function runTurn(text, files, fork){
   // 對話是消耗用量的主要來源：結束時馬上更新用量；Google 端統計有延遲，20 秒後再補抓一次
   refreshUsage(); setTimeout(() => { if (!running) refreshUsage(); }, 20000);
   notifyDone(!!reply);
-  if (reply) fetchSuggestion(text, reply);
+  if (needComp) showComponentCard(a, needComp);
+  // PDF 編譯失敗：把錯誤交回給 AI 自動修正（最多 2 次）
+  if (pdfFailures.length && fixDepth < 2 && convId){
+    const f = pdfFailures[0];
+    toast(`⚙ ${f.name} 編譯有錯，自動請 AI 修正（第 ${fixDepth + 1} 次）`);
+    return runTurn(`⚙ 自動修正：Typst 編譯「${f.name}」時發生錯誤，請依錯誤訊息修正同一個檔案（不要執行指令）：\n\`\`\`\n${f.error}\n\`\`\``,
+                   [], null, fixDepth + 1);
+  }
+  if (pdfFailures.length) a.meta.textContent = `⚠ ${pdfFailures.map(f => f.name).join("、")} 自動修正 2 次仍無法編譯，.typ 檔在 output 資料夾`;
+  if (reply && !needComp) fetchSuggestion(text, reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
 }
@@ -1418,6 +1449,88 @@ function applyPrefs(p){
   basePlaceholder = p.send_key === "ctrl_enter" ? "問點什麼…（Ctrl+Enter 送出，Enter 換行）" : "問點什麼…（Enter 送出，Shift+Enter 換行）";
   if (!suggestion) $("#input").placeholder = basePlaceholder;
 }
+/* ---------- 元件下載：需要時在對話裡詢問（像 claude.ai 上網前先徵求同意） ---------- */
+async function installComponent(id, onProgress){
+  const res = await fetch("/api/components/install", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id})});
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "", result = {ok:false, message:"連線中斷"};
+  for (;;){
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0){
+      const ev = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+      if (ev.event === "progress") onProgress(ev);
+      if (ev.event === "done") result = ev;
+    }
+  }
+  if (result.ok === undefined && !res.ok) result = await res.json();
+  return result;
+}
+const fmtMB = n => (n / 1048576).toFixed(1) + " MB";
+async function paintComponents(){
+  let list; try { list = await (await fetch("/api/components")).json(); } catch { return; }
+  const box = $("#compList"); box.innerHTML = "";
+  for (const [id, c] of Object.entries(list)){
+    const row = document.createElement("div"); row.className = "comprow";
+    row.innerHTML = `<div class="srow"><b></b><span class="meta"></span><span class="sp"></span><button class="act"></button></div>
+      <p class="note"></p><div class="pprog" hidden><div class="bar"><i></i></div><span class="ptxt"></span><button class="cancel">取消</button></div>`;
+    row.querySelector("b").textContent = c.name;
+    row.querySelector(".meta").textContent = c.installed ? `已安裝 v${c.version}（佔 ${c.used}）` : `未安裝（${c.size_text}）`;
+    row.querySelector(".note").textContent = `${c.purpose}。授權：${c.license}。`;
+    const act = row.querySelector(".act"), prog = row.querySelector(".pprog");
+    act.textContent = c.installed ? "移除" : "安裝";
+    row.querySelector(".cancel").onclick = () => post("/api/components/cancel", {id});
+    act.onclick = async () => {
+      if (c.installed){
+        if (!confirm(`移除 ${c.name}？之後要用時會再詢問下載。`)) return;
+        await post("/api/components/remove", {id}); return paintComponents();
+      }
+      act.disabled = true; prog.hidden = false;
+      const r = await installComponent(id, p => {
+        prog.querySelector("i").style.width = (p.total ? p.done / p.total * 100 : 0) + "%";
+        prog.querySelector(".ptxt").textContent = `${p.msg || "下載中"}　${fmtMB(p.done)} / ${fmtMB(p.total)}`;
+      });
+      toast(r.ok ? `✔ 已安裝 ${c.name}` : r.message); paintComponents();
+    };
+    box.appendChild(row);
+  }
+}
+function showComponentCard(a, ev){
+  const info = ev.info, names = ev.files.map(f => baseName(f)).join("、");
+  const card = document.createElement("div"); card.className = "permcard";
+  card.innerHTML = `<div class="ph">📦 需要下載元件</div>
+    <p>要把 <b></b> 轉成 PDF，需要先下載 <b>${escapeHtml(info.name)}</b>。</p>
+    <ul><li>用途：${escapeHtml(info.purpose)}</li><li>大小：${escapeHtml(info.size_text)}</li>
+      <li>授權：${escapeHtml(info.license)}（免費、開源）</li><li>來源：官方 GitHub 發布，下載後會核對檢查碼</li>
+      <li>只需要下載一次；之後可以在「⚙ 設定 → 元件」移除</li></ul>
+    <div class="pbtns"><button class="primary allow">允許下載</button><button class="deny">這次不要</button></div>
+    <div class="pprog" hidden><div class="bar"><i></i></div><span class="ptxt">連線中…</span><button class="cancel">取消</button></div>`;
+  card.querySelector("p b").textContent = names;
+  a.el.insertBefore(card, a.meta);
+  const prog = card.querySelector(".pprog"), bar = prog.querySelector("i"), txt = prog.querySelector(".ptxt");
+  card.querySelector(".deny").onclick = () => {
+    card.innerHTML = `<div class="ph muted">已略過下載</div><p class="meta">.typ 原始檔已經存在 output 資料夾；之後可以在「⚙ 設定 → 元件」安裝 Typst，再請 AI 重新產生。</p>`;
+  };
+  card.querySelector(".cancel").onclick = () => post("/api/components/cancel", {id:ev.id});
+  card.querySelector(".allow").onclick = async () => {
+    card.querySelector(".pbtns").hidden = true; prog.hidden = false;
+    const r = await installComponent(ev.id, p => {
+      bar.style.width = (p.total ? p.done / p.total * 100 : 0) + "%";
+      txt.textContent = `${p.msg || "下載中"}　${fmtMB(p.done)} / ${fmtMB(p.total)}`;
+    });
+    if (!r.ok){ txt.textContent = r.message; card.querySelector(".pbtns").hidden = false; card.querySelector(".allow").textContent = "再試一次"; return; }
+    txt.textContent = "安裝完成，正在產生 PDF…"; bar.style.width = "100%";
+    const c = await post("/api/typst/compile", {files:ev.files, conversation_id:convId});
+    const ok = (c.results || []).filter(x => x.ok), bad = (c.results || []).filter(x => !x.ok);
+    card.innerHTML = `<div class="ph">✔ 已安裝 ${escapeHtml(info.name)}</div>` + (c.links ? renderMd(c.links) : "") +
+      (bad.length ? `<p class="meta">⚠ ${bad.map(x => escapeHtml(x.name)).join("、")} 編譯有錯，請說「修正 PDF」讓 AI 依錯誤修改。</p>` : "");
+    if (ok.length) toast(`📄 已產生 ${ok.length} 個 PDF`);
+  };
+  scrollDown();
+}
+
 /* ---------- 預測回覆：回答完在空白輸入框顯示建議的下一句，按 Tab 採用 ---------- */
 let basePlaceholder = "問點什麼…（Enter 送出，Shift+Enter 換行）", suggestion = "", suggestToken = 0;
 function setSuggestion(t){
@@ -1499,7 +1612,7 @@ async function paintBgList(){
 }
 async function openPrefs(section){
   await loadPrefs(); fillDefaultModel(); paintPrefs(); await paintBgList();
-  checkUpdate(false); loadAgyStat();
+  checkUpdate(false); loadAgyStat(); paintComponents();
   $("#sdlg").showModal();
   if (section) [...document.querySelectorAll("#sbody section")].find(s => s.dataset.title === section)?.scrollIntoView();
 }
