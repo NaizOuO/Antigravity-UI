@@ -169,6 +169,86 @@ dialog{border:1px solid var(--border);border-radius:12px;background:var(--panel)
 dialog textarea{width:100%;height:160px;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:8px}
 dialog .r{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 dialog button{border:1px solid var(--border);background:none;border-radius:6px;padding:5px 14px}
+dialog .primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+/* 長內容的對話框：標題與按鈕固定，中間捲動（不會超出畫面） */
+dialog.tall[open]{display:flex;flex-direction:column;max-height:88vh}
+dialog.tall .dbody,dialog.big .dbody{overflow:auto;flex:1;min-height:0;padding-right:4px}
+dialog.wide{width:min(680px,94vw)}
+dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height:86vh}
+.dhead{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.dhead h3{margin:0}
+.dhead .x{margin-left:auto;border:0;font-size:16px;color:var(--muted)}
+.tabs{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.tabs button{border:0;border-radius:0;padding:3px 14px}
+.tabs button.on{background:var(--accent);color:var(--accent-text)}
+#pfiles{max-height:220px}
+.mempv{border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:6px 12px;max-height:150px;overflow:auto;font-size:13px;cursor:zoom-in}
+.mempv:hover{border-color:var(--accent)}
+.mempv:empty::before{content:"還沒有記憶。點這裡可以自己寫下要它記住的事。";color:var(--muted)}
+#memView{font-size:14.5px}
+#memEdit{width:100%;height:100%;min-height:50vh;font-family:Consolas,"Microsoft JhengHei",monospace;font-size:13.5px}
+/* 設定面板 */
+#sdlg section{padding:4px 0 14px;border-bottom:1px solid var(--border);margin-bottom:10px}
+#sdlg section:last-child{border-bottom:0}
+#sdlg h4{margin:4px 0 10px;font-size:13px;color:var(--accent);letter-spacing:.06em}
+.srow{display:flex;align-items:center;gap:8px;margin:8px 0 2px}
+.srow .sp{flex:1}
+.srow button,#sdlg .seg button{font-size:13px;padding:3px 10px}
+.note{font-size:12px;color:var(--muted);margin:2px 0 8px}
+#bgList{border:1px solid var(--border);border-radius:8px;background:var(--bg);max-height:170px;overflow:auto;padding:4px}
+.bgi{display:flex;align-items:center;gap:10px;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:13.5px}
+.bgi:hover{background:var(--code)}
+.bgi.on{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
+.bgi .th{width:40px;height:26px;border-radius:4px;background:var(--code) center/cover no-repeat;flex:none;border:1px solid var(--border)}
+.bgi span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg{display:flex;flex-wrap:wrap;border:1px solid var(--border);border-radius:8px;overflow:hidden;width:fit-content}
+#sdlg .seg button{border:0;border-radius:0;border-right:1px solid var(--border)}
+#sdlg .seg button:last-child{border-right:0}
+#sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
+.slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
+.slider[hidden]{display:none}
+.slider input{width:100%;accent-color:var(--accent)}
+.slider output{text-align:right;font-variant-numeric:tabular-nums;color:var(--accent)}
+/* 背景圖片：照 Naiz Studio 的六種填充方式；內容維持可讀（半透明底色＋毛玻璃，公式與程式碼不透明） */
+#bgLayer{position:fixed;inset:0;z-index:0;pointer-events:none;background-repeat:no-repeat;opacity:0;transition:opacity .2s}
+#side,#main{position:relative;z-index:1}
+body.has-bg #side{background:color-mix(in srgb,var(--side) 78%,transparent);backdrop-filter:blur(12px)}
+body.has-bg #bar{background:color-mix(in srgb,var(--panel) 80%,transparent);backdrop-filter:blur(12px)}
+body.has-bg #comp{background:transparent}
+body.has-bg #box{background:color-mix(in srgb,var(--panel) 88%,transparent);backdrop-filter:blur(10px)}
+body.has-bg .msg.assistant .bubble{background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(8px);border-radius:12px;padding:8px 14px}
+body.has-bg .bubble pre,body.has-bg .bubble code,body.has-bg .katex-display{background:var(--code)}
+body.has-bg .katex-display{border-radius:6px;padding:6px 4px}
+body.has-bg .meta,body.has-bg .steps,body.has-bg .status{background:color-mix(in srgb,var(--bg) 70%,transparent);border-radius:6px;padding:1px 6px;width:fit-content}
+/* 側欄：可拖曳寬度、可收起 */
+#side{position:relative}
+#sideResize{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:3}
+#sideResize:hover,#sideResize.drag{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+#collapseSide{border:0;background:none;color:var(--muted);font-size:16px;padding:0 4px;margin-left:4px}
+#collapseSide:hover{color:var(--accent)}
+body.side-collapsed #side{display:none}
+body.side-collapsed #toggleSide{display:inline-block}
+body.resizing{cursor:col-resize;user-select:none}
+/* 一般對話首頁 */
+.home{max-width:760px;margin:6vh auto 0;text-align:center;color:var(--text)}
+.home .logo{width:64px;height:64px;border-radius:16px;box-shadow:0 10px 40px color-mix(in srgb,#FF7A45 45%,transparent);animation:float 5s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-6px)}}
+.home h1{font-size:26px;margin:18px 0 4px;font-weight:700;letter-spacing:.01em}
+.home h1 .hl{background:linear-gradient(90deg,var(--accent),#FF7A45);-webkit-background-clip:text;background-clip:text;color:transparent}
+.home .sub{color:var(--muted);font-size:13.5px;margin:0 0 22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;text-align:left}
+.card{border:1px solid var(--border);background:color-mix(in srgb,var(--panel) 90%,transparent);border-radius:12px;padding:12px 14px;cursor:pointer;transition:transform .15s,border-color .15s,box-shadow .15s}
+.card:hover{transform:translateY(-3px);border-color:var(--accent);box-shadow:0 6px 18px rgba(0,0,0,.12)}
+.card .ic{font-size:20px}
+.card b{display:block;margin:4px 0 2px;font-size:14.5px}
+.card small{color:var(--muted);font-size:12.5px;line-height:1.45;display:block}
+.recent{margin-top:22px;text-align:left}
+.recent h5{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.06em}
+.recent .chipz{display:flex;flex-wrap:wrap;gap:6px}
+.recent button{border:1px solid var(--border);background:color-mix(in srgb,var(--panel) 85%,transparent);border-radius:16px;padding:3px 12px;font-size:13px;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recent button:hover{border-color:var(--accent);color:var(--accent)}
+.home .tip{margin-top:22px;font-size:12.5px;color:var(--muted)}
+.home .tip kbd{border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11.5px;background:var(--panel)}
 @media (max-width:760px){
   #side{position:fixed;z-index:5;height:100%;transform:translateX(-100%);transition:.2s}
   #side.open{transform:none}
@@ -178,18 +258,20 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
 </style>
 </head>
 <body>
+<div id="bgLayer" aria-hidden="true"></div>
 <aside id="side">
-  <div id="brand"><img src="/icon.png" alt=""><b>Antigravity UI</b><button class="vbadge" id="verBadge" title="檢查更新"></button></div>
+  <div id="brand"><img src="/icon.png" alt=""><b>Antigravity UI</b><button class="vbadge" id="verBadge" title="檢查更新"></button><button id="collapseSide" title="收起側欄">«</button></div>
   <div class="top"><button id="newBtn">＋ 新對話</button></div>
   <div class="sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
   <div id="projs"></div>
   <div class="sect"><span id="histLabel">對話</span></div>
   <div id="hist"></div>
   <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a> · <a href="#" id="shortcutLink">建立桌面捷徑</a></div>
+  <div id="sideResize" title="拖曳調整寬度（雙擊恢復預設）"></div>
 </aside>
 <main id="main">
   <div id="bar">
-    <button class="ghost" id="toggleSide">☰</button>
+    <button class="ghost" id="toggleSide" title="顯示側欄">☰</button>
     <label>模型 <select id="family"><option>載入中…</option></select></label>
     <label title="只列出這個模型實際支援的強度">思考強度 <select id="effort"></select></label>
     <button class="ghost" id="searchBtn" title="開啟後會要求模型先上網搜尋並附來源（關閉時模型仍可能自己決定搜尋）">🌐 聯網搜尋</button>
@@ -198,6 +280,8 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
     <button class="ghost" id="projChip" title="管理專案檔案與指示"></button>
     <button class="ghost" id="usageChip" title="查看用量">用量</button>
     <button class="ghost" id="settingsBtn">常駐指示</button>
+    <button class="ghost" id="outputBtn" title="打開 output 資料夾（對話中請 AI 產生的檔案都存在這裡）">📂 輸出</button>
+    <button class="ghost" id="prefBtn" title="設定">⚙ 設定</button>
   </div>
   <div id="banner" hidden></div>
   <div id="msgsWrap">
@@ -226,14 +310,16 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
   <textarea id="instr"></textarea>
   <div class="r"><button id="dlgCancel">取消</button><button id="dlgSave">儲存</button></div>
 </dialog>
-<dialog id="pdlg">
+<dialog id="pdlg" class="tall">
   <h3 style="margin-top:0">專案設定</h3>
+  <div class="dbody">
   <label class="f">專案名稱</label>
   <input type="text" id="pname">
   <label class="f">專案指示（這個專案的新對話會自動附上，例如「這些是我們實驗室 transmon 相關論文」）</label>
   <textarea id="pinstr"></textarea>
-  <label class="f">🧠 專案記憶（這個專案每個新對話開頭都會帶上；可以直接修改）</label>
-  <textarea id="pmem" placeholder="還沒有記憶。在這個專案裡對話後會自動整理；也可以自己寫下要它記住的事。"></textarea>
+  <label class="f">🧠 專案記憶（這個專案每個新對話開頭都會帶上）</label>
+  <textarea id="pmem" hidden></textarea>
+  <div id="pmemPreview" class="mempv" title="點一下展開查看／編輯"></div>
   <div class="memrow">
     <label><input type="checkbox" id="pmemAuto"> 每次對話後自動更新記憶（用 Gemini Flash，額度很少）</label>
     <span><span id="pmemCount"></span> <span id="pmemInfo"></span> <button id="pmemRebuild" title="讀這個專案的所有對話，重新整理一份記憶">從所有對話重建</button></span>
@@ -242,9 +328,58 @@ dialog button{border:1px solid var(--border);background:none;border-radius:6px;p
   <label class="f">專案檔案（模型會依問題自己挑需要的檔案讀；可直接把檔案拖進下面框框）</label>
   <div id="pfiles"></div>
   <input type="file" id="pfileIn" multiple hidden>
+  </div>
   <div class="r" style="justify-content:space-between">
     <button id="pUpload">＋ 上傳檔案</button>
     <span><button id="pClose">取消</button> <button id="pSave">儲存</button></span>
+  </div>
+</dialog>
+<dialog id="memdlg" class="big">
+  <div class="dhead"><h3>🧠 專案記憶</h3>
+    <span class="tabs"><button data-tab="view" class="on">預覽</button><button data-tab="edit">編輯</button></span></div>
+  <div class="dbody">
+    <div id="memView" class="bubble"></div>
+    <textarea id="memEdit" hidden placeholder="還沒有記憶。在這個專案裡對話後會自動整理；也可以自己寫下要它記住的事（Markdown）。"></textarea>
+  </div>
+  <div class="r" style="justify-content:space-between;align-items:center">
+    <span id="memCount" class="meta"></span>
+    <span><button id="memClose">關閉</button> <button id="memSave" class="primary">儲存</button></span>
+  </div>
+</dialog>
+<dialog id="sdlg" class="tall wide">
+  <div class="dhead"><h3>⚙ 設定</h3><button id="sClose" class="x" title="關閉（未儲存的變更會還原）">✕</button></div>
+  <div class="dbody">
+    <section>
+      <h4>外觀</h4>
+      <div class="srow"><b>背景圖片</b><span class="meta" id="bgCount"></span>
+        <span class="sp"></span><button id="bgAdd">＋ 加入圖片</button><button id="bgFolder">開啟圖片資料夾</button></div>
+      <p class="note">把圖片放進圖片資料夾（setting\images），或按「加入圖片」，就能在下面選擇使用。</p>
+      <div id="bgList"></div>
+      <input type="file" id="bgFile" accept="image/*" multiple hidden>
+      <div class="srow"><b>填充方式</b></div>
+      <div class="seg" id="bgMode">
+        <button data-v="cover">覆蓋</button><button data-v="contain">完整</button><button data-v="stretch">延展</button>
+        <button data-v="center">置中</button><button data-v="tile">並排</button><button data-v="manual">自由</button>
+      </div>
+      <p class="note" id="bgModeNote"></p>
+      <div class="slider"><span>透明度</span><input type="range" id="bgAlpha" min="0" max="100" step="1"><output></output></div>
+      <div class="slider"><span>模糊</span><input type="range" id="bgBlur" min="0" max="20" step="1"><output></output></div>
+      <div class="slider pos"><span>水平位置</span><input type="range" id="bgX" min="0" max="100" step="1"><output></output></div>
+      <div class="slider pos"><span>垂直位置</span><input type="range" id="bgY" min="0" max="100" step="1"><output></output></div>
+      <div class="slider man"><span>縮放</span><input type="range" id="bgScale" min="10" max="300" step="5"><output></output></div>
+      <p class="note">有背景時，對話文字、公式和程式碼會加上半透明底色，避免背景影響閱讀。</p>
+    </section>
+    <section>
+      <h4>檔案與資料夾</h4>
+      <div class="srow"><b>輸出資料夾</b><span class="sp"></span><button data-folder="output">開啟</button></div>
+      <p class="note">請 AI「輸出成檔案」時（md、csv、程式碼…）會存在主目錄的 output 資料夾。</p>
+      <div class="srow"><b>設定資料夾</b><span class="sp"></span><button data-folder="setting">開啟</button></div>
+      <p class="note">setting 資料夾存放設定（config.json）與背景圖片；output、setting、data 都不會被更新覆蓋。</p>
+    </section>
+  </div>
+  <div class="r" style="justify-content:space-between;align-items:center">
+    <span class="meta" id="sStatus"></span>
+    <span><button id="sRevert">還原</button> <button id="sSave" class="primary">儲存</button></span>
   </div>
 </dialog>
 <dialog id="scdlg">
@@ -620,6 +755,7 @@ async function loadModels(refresh = true){
     for (const f of families){ const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; sel.appendChild(o); }
     if (!families.length){ sel.innerHTML = `<option value="">（取不到模型清單，用預設）</option>`; return; }
     if (!setModel(store.get("model", "gemini-3.1-pro-high"))) setModel(families[0].variants[0].id);
+    if ($("#homeModel")) $("#homeModel").textContent = modelLabel(currentModel());
   } catch { sel.innerHTML = `<option value="">（伺服器未回應）</option>`; }
 }
 $("#family").onchange = e => {
@@ -823,8 +959,41 @@ function paintMemCount(){
   const n = $("#pmem").value.trim().length, c = $("#pmemCount");
   c.textContent = `${n} / ${memLimit} 字`;
   c.classList.toggle("over", n > memLimit);
+  $("#pmemPreview").innerHTML = $("#pmem").value.trim() ? renderMd($("#pmem").value) : "";
 }
 $("#pmem").addEventListener("input", paintMemCount);
+
+/* 專案記憶的大視窗：預覽（排版後的 Markdown）／編輯 */
+function memTab(tab){
+  document.querySelectorAll("#memdlg .tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  $("#memView").hidden = tab !== "view"; $("#memEdit").hidden = tab !== "edit";
+  if (tab === "view") $("#memView").innerHTML = $("#memEdit").value.trim() ? renderMd($("#memEdit").value)
+    : `<p class="meta">還沒有記憶。切到「編輯」可以自己寫下要它記住的事。</p>`;
+  else $("#memEdit").focus();
+}
+function paintMemDlgCount(){
+  const n = $("#memEdit").value.trim().length;
+  $("#memCount").textContent = `${n} / ${memLimit} 字`;
+  $("#memCount").style.color = n > memLimit ? "var(--danger)" : "";
+}
+function openMemDialog(tab){
+  $("#memEdit").value = $("#pmem").value;
+  paintMemDlgCount(); memTab(tab || ($("#pmem").value.trim() ? "view" : "edit"));
+  $("#memdlg").showModal();
+}
+$("#pmemPreview").onclick = () => openMemDialog();
+document.querySelectorAll("#memdlg .tabs button").forEach(b => b.onclick = () => memTab(b.dataset.tab));
+$("#memEdit").addEventListener("input", paintMemDlgCount);
+$("#memClose").onclick = () => {
+  if ($("#memEdit").value !== $("#pmem").value && !confirm("記憶有修改還沒儲存，確定要關閉？")) return;
+  $("#memdlg").close();
+};
+$("#memSave").onclick = async () => {
+  const r = await post("/api/project/update", {id:project, memory:$("#memEdit").value});
+  if (r.ok === false){ alert(r.message); return; }
+  $("#pmem").value = $("#memEdit").value; paintMemCount();
+  memTab("view");
+};
 function paintMemory(p){
   if (p.memory_limit) memLimit = p.memory_limit;
   $("#pmem").value = p.memory || "";
@@ -949,24 +1118,199 @@ async function openConv(id){
 }
 function emptyState(){
   const p = curProject();
-  if (!p) return `<div id="empty"><h2>Antigravity CLI</h2><p>輸入問題，或把 PDF / 圖片拖進來、直接 Ctrl+V 貼上截圖。</p></div>`;
+  if (!p) return homeHtml();
   return `<div id="empty"><h2>📁 ${escapeHtml(p.name)}</h2>
     <div class="projcard">${p.file_count ? `專案裡有 <b>${p.file_count}</b> 份檔案，直接提問即可，模型會自己挑需要的檔案讀，並註明出處。`
       : `這個專案還沒有檔案。先上傳論文或講義，之後的提問都能引用它們。`}<br>
       ${p.memory ? `🧠 已有專案記憶（${p.memory.split("\n").filter(l => /^\s*[-*]/.test(l)).length} 條重點），新對話會記得之前討論過的內容。<br>` : ""}
       <button onclick="openProjectDialog()">管理檔案與指示</button></div></div>`;
 }
+/* ---------- 一般對話首頁：問候、快速開始卡片、最近的對話、小技巧 ---------- */
+const HOME_CARDS = [
+  {ic:"📷", t:"解析一張圖片", d:"貼上截圖或板書照片，逐步說明內容", p:"這張圖在說什麼？請逐步說明重點，有公式的話也幫我整理。", hint:"先按 Ctrl+V 貼上圖片，再送出"},
+  {ic:"📄", t:"讀懂一份 PDF", d:"論文、講義整理成重點筆記", p:"請閱讀附件的 PDF，整理成重點筆記（包含關鍵公式與推導脈絡）。", hint:"把 PDF 拖進輸入框，再送出"},
+  {ic:"∑", t:"檢查我的推導", d:"找出錯在哪一步，並說明物理直覺", p:"幫我檢查下面這段推導是否正確；有錯的話指出是哪一步，並說明正確的想法：\n\n"},
+  {ic:"🌐", t:"查最新資料", d:"開啟聯網搜尋，附上來源", p:"請上網搜尋並整理：", search:true},
+];
+const HOME_TIPS = [
+  "直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 就能貼上截圖",
+  "把多份 PDF 放進「專案」，模型會自己挑需要的讀",
+  "滑鼠移到自己的訊息上可以「✎ 編輯」重新送出",
+  "請 AI「輸出成 md 檔」，檔案會存在 <b>📂 輸出</b> 資料夾",
+  "右側的短線可以快速跳回之前問過的問題",
+  "<kbd>Shift</kbd>+<kbd>Enter</kbd> 換行，<kbd>Enter</kbd> 送出",
+];
+function homeHtml(){
+  const h = new Date().getHours();
+  const hello = h < 5 ? "夜深了" : h < 11 ? "早安" : h < 14 ? "午安" : h < 18 ? "下午好" : "晚安";
+  const day = new Date().toLocaleDateString("zh-TW", {month:"long", day:"numeric", weekday:"long"});
+  const tip = HOME_TIPS[Math.floor(Math.random() * HOME_TIPS.length)];
+  return `<div id="empty" class="home">
+    <img class="logo" src="/icon.png" alt="">
+    <h1>${hello}，今天想<span class="hl">研究什麼</span>？</h1>
+    <p class="sub">${day} · <span id="homeModel">${escapeHtml(modelLabel(currentModel()) || "")}</span></p>
+    <div class="cards">${HOME_CARDS.map((c, i) => `<div class="card" data-i="${i}"><span class="ic">${c.ic}</span><b>${c.t}</b><small>${c.d}</small></div>`).join("")}</div>
+    <div class="recent" id="homeRecent" hidden><h5>最近的對話</h5><div class="chipz"></div></div>
+    <p class="tip">💡 ${tip}</p></div>`;
+}
+async function fillHome(){
+  const home = document.querySelector("#empty.home");
+  if (!home) return;
+  home.querySelectorAll(".card").forEach(el => el.onclick = () => {
+    const c = HOME_CARDS[+el.dataset.i];
+    if (c.search && !searchOn) $("#searchBtn").click();
+    $("#input").value = c.p; autoGrow(); $("#input").focus();
+    $("#input").setSelectionRange(c.p.length, c.p.length);
+    if (c.hint) $("#hint").textContent = "💡 " + c.hint;
+  });
+  try {
+    const items = (await (await fetch("/api/history?project=")).json()).items.slice(0, 5);
+    const box = home.querySelector("#homeRecent");
+    if (!items.length || !box) return;
+    const chips = box.querySelector(".chipz");
+    for (const it of items){
+      const b = document.createElement("button"); b.textContent = it.title || "（未命名）"; b.title = it.title || "";
+      b.onclick = () => openConv(it.id); chips.appendChild(b);
+    }
+    box.hidden = false;
+  } catch {}
+}
 function newConv(){
   if (running) return;
   convId = null;
-  $("#list").innerHTML = emptyState();
+  $("#list").innerHTML = emptyState(); fillHome();
   $("#side").classList.remove("open"); loadHistory(); rebuildOutline(); $("#input").focus();
 }
 $("#newBtn").onclick = newConv;
-$("#toggleSide").onclick = () => $("#side").classList.toggle("open");
 
+/* ---------- 側欄：拖曳調整寬度、收起／展開（記在這台電腦的瀏覽器裡） ---------- */
+const SIDE_MIN = 190, SIDE_MAX = 520, SIDE_DEFAULT = 250;
+function setSideWidth(w){ $("#side").style.width = Math.max(SIDE_MIN, Math.min(SIDE_MAX, w)) + "px"; }
+setSideWidth(+store.get("sideWidth", SIDE_DEFAULT));
+const narrow = () => matchMedia("(max-width:760px)").matches;
+function setCollapsed(on){ document.body.classList.toggle("side-collapsed", on); store.set("sideCollapsed", on ? "1" : "0"); }
+setCollapsed(store.get("sideCollapsed", "0") === "1");
+$("#collapseSide").onclick = () => narrow() ? $("#side").classList.remove("open") : setCollapsed(true);
+$("#toggleSide").onclick = () => narrow() ? $("#side").classList.toggle("open") : setCollapsed(false);
+$("#sideResize").addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const h = $("#sideResize"); h.classList.add("drag"); h.setPointerCapture(e.pointerId);
+  document.body.classList.add("resizing");
+  const move = ev => setSideWidth(ev.clientX);
+  const up = () => {
+    h.classList.remove("drag"); document.body.classList.remove("resizing");
+    h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up);
+    store.set("sideWidth", parseInt($("#side").style.width));
+  };
+  h.addEventListener("pointermove", move); h.addEventListener("pointerup", up);
+});
+$("#sideResize").ondblclick = () => { setSideWidth(SIDE_DEFAULT); store.set("sideWidth", SIDE_DEFAULT); };
+
+/* ---------- 資料夾 ---------- */
+const openFolder = which => post("/api/open_folder", {which});
+$("#outputBtn").onclick = () => openFolder("output");
+document.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => openFolder(b.dataset.folder));
+
+/* ---------- 設定面板（背景設計參考 Naiz Studio：圖片資料夾、六種填充方式、透明度／位置／縮放） ---------- */
+const BG_NOTES = {
+  cover:"保持比例放大到填滿，裁掉超出的部分", contain:"保持比例完整顯示，邊緣可能留白",
+  stretch:"拉滿整個視窗，比例會被扭曲", center:"維持原始大小，可調整擺放位置",
+  tile:"以原始大小重複並排", manual:"自由調整位置與縮放比例",
+};
+const BG_KEYS = ["bg_image", "bg_mode", "bg_alpha", "bg_blur", "bg_x", "bg_y", "bg_scale"];
+let savedPrefs = {}, prefs = {}, bgNatural = {w:0, h:0};
+function applyBackground(p){
+  const layer = $("#bgLayer"), on = !!p.bg_image;
+  document.body.classList.toggle("has-bg", on);
+  if (!on){ layer.style.opacity = 0; layer.style.backgroundImage = "none"; return; }
+  const url = "/bg/" + encodeURIComponent(p.bg_image);
+  layer.style.backgroundImage = `url("${url}")`;
+  layer.style.opacity = (p.bg_alpha ?? 35) / 100;
+  const blur = +(p.bg_blur || 0);
+  layer.style.filter = blur ? `blur(${blur}px)` : "none";
+  layer.style.inset = blur ? `-${blur * 2}px` : "0";          // 模糊時放大一點，邊緣才不會透出白邊
+  const pos = `${p.bg_x ?? 50}% ${p.bg_y ?? 50}%`, mode = p.bg_mode || "cover";
+  const set = (size, repeat, position) => Object.assign(layer.style, {backgroundSize:size, backgroundRepeat:repeat, backgroundPosition:position});
+  if (mode === "cover") set("cover", "no-repeat", "center");
+  else if (mode === "contain") set("contain", "no-repeat", "center");
+  else if (mode === "stretch") set("100% 100%", "no-repeat", "center");
+  else if (mode === "center") set("auto", "no-repeat", pos);
+  else if (mode === "tile") set("auto", "repeat", "top left");
+  else {                                                       // 自由：以圖片原始大小為 100%
+    const s = (p.bg_scale ?? 100) / 100;
+    const img = new Image();
+    img.onload = () => { bgNatural = {w:img.naturalWidth, h:img.naturalHeight};
+      set(`${Math.round(img.naturalWidth * s)}px ${Math.round(img.naturalHeight * s)}px`, "no-repeat", pos); };
+    img.src = url;
+  }
+}
+async function loadPrefs(){
+  try { savedPrefs = await (await fetch("/api/settings")).json(); } catch { savedPrefs = {}; }
+  prefs = {...savedPrefs};
+  applyBackground(prefs);
+}
+function paintPrefs(){
+  document.querySelectorAll("#bgMode button").forEach(b => b.classList.toggle("on", b.dataset.v === (prefs.bg_mode || "cover")));
+  $("#bgModeNote").textContent = BG_NOTES[prefs.bg_mode || "cover"];
+  $("#bgModeNote").style.color = prefs.bg_mode === "stretch" ? "#FF7A45" : "";
+  const sliders = {bgAlpha:["bg_alpha", 35, v => v], bgBlur:["bg_blur", 0, v => v + "px"], bgX:["bg_x", 50, v => v],
+                   bgY:["bg_y", 50, v => v], bgScale:["bg_scale", 100, v => v + "%"]};
+  for (const [id, [key, def, fmt]] of Object.entries(sliders)){
+    const el = $("#" + id); el.value = prefs[key] ?? def; el.nextElementSibling.textContent = fmt(el.value);
+  }
+  const m = prefs.bg_mode || "cover";
+  document.querySelectorAll("#sdlg .slider.pos").forEach(r => r.hidden = !(m === "center" || m === "manual"));
+  document.querySelectorAll("#sdlg .slider.man").forEach(r => r.hidden = m !== "manual");
+  const dirty = BG_KEYS.some(k => (prefs[k] ?? "") !== (savedPrefs[k] ?? ""));
+  $("#sStatus").textContent = dirty ? "● 有尚未儲存的變更（目前是預覽）" : "";
+}
+async function paintBgList(){
+  const j = await (await fetch("/api/backgrounds")).json();
+  $("#bgCount").textContent = `${j.images.length} 張`;
+  const list = $("#bgList"); list.innerHTML = "";
+  for (const name of ["", ...j.images]){
+    const row = document.createElement("div"); row.className = "bgi" + ((prefs.bg_image || "") === name ? " on" : "");
+    row.innerHTML = `<span class="th"></span><span></span>`;
+    row.querySelector("span:last-child").textContent = name || "不使用背景";
+    if (name) row.querySelector(".th").style.backgroundImage = `url("/bg/${encodeURIComponent(name)}")`;
+    row.onclick = () => { prefs.bg_image = name; applyBackground(prefs); paintBgList(); paintPrefs(); };
+    list.appendChild(row);
+  }
+}
+async function openPrefs(){
+  await loadPrefs(); paintPrefs(); await paintBgList();
+  $("#sdlg").showModal();
+}
+$("#prefBtn").onclick = openPrefs;
+document.querySelectorAll("#bgMode button").forEach(b => b.onclick = () => { prefs.bg_mode = b.dataset.v; applyBackground(prefs); paintPrefs(); });
+for (const [id, key] of [["bgAlpha","bg_alpha"],["bgBlur","bg_blur"],["bgX","bg_x"],["bgY","bg_y"],["bgScale","bg_scale"]])
+  $("#" + id).addEventListener("input", e => { prefs[key] = +e.target.value; applyBackground(prefs); paintPrefs(); });
+$("#bgFolder").onclick = () => openFolder("images");
+$("#bgAdd").onclick = () => $("#bgFile").click();
+$("#bgFile").onchange = async e => {
+  let last = null;
+  for (const f of e.target.files){
+    const data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(f); });
+    const r = await post("/api/backgrounds/upload", {name:f.name, data});
+    if (r.ok) last = r.name; else alert(r.message);
+  }
+  e.target.value = "";
+  if (last){ prefs.bg_image = last; applyBackground(prefs); }
+  paintBgList(); paintPrefs();
+};
+$("#sRevert").onclick = () => { prefs = {...savedPrefs}; applyBackground(prefs); paintPrefs(); paintBgList(); };
+$("#sSave").onclick = async () => {
+  const body = Object.fromEntries(BG_KEYS.map(k => [k, prefs[k]]).filter(([, v]) => v !== undefined));
+  savedPrefs = await post("/api/settings", body); prefs = {...savedPrefs};
+  paintPrefs(); $("#sStatus").textContent = "✔ 已儲存";
+};
+const closePrefs = () => { prefs = {...savedPrefs}; applyBackground(prefs); $("#sdlg").close(); };   // 沒儲存就關掉：還原
+$("#sClose").onclick = closePrefs;
+$("#sdlg").addEventListener("cancel", e => { e.preventDefault(); closePrefs(); });
+
+loadPrefs();
 loadModels().then(refreshUsage);
-loadProjects().then(() => { if (!convId && $("#empty")) $("#list").innerHTML = emptyState(); });
+loadProjects().then(() => { if (!convId && $("#empty")) { $("#list").innerHTML = emptyState(); fillHome(); } });
 loadHistory(); checkUpdate(false); checkShortcut(); $("#input").focus();
 </script>
 </body>

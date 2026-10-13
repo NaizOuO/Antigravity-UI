@@ -32,9 +32,17 @@ WORK = DATA / "workspace"          # agy 的工作目錄
 UPLOADS = WORK / "uploads"
 HISTORY = DATA / "history"
 PROJECTS = DATA / "projects"       # 每個專案：projects/<id>/project.json + files/
-SETTINGS = DATA / "settings.json"
-for p in (WORK, UPLOADS, HISTORY, PROJECTS):
+OUTPUT = ROOT / "output"           # 對話中請 AI 產生的檔案（md、csv、程式碼…）
+SETTING_DIR = ROOT / "setting"     # 使用者設定：config.json、背景圖片（images/）
+SETTINGS = SETTING_DIR / "config.json"
+BG_DIR = SETTING_DIR / "images"
+BG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+for p in (WORK, UPLOADS, HISTORY, PROJECTS, OUTPUT, BG_DIR):
     p.mkdir(parents=True, exist_ok=True)
+# v1.3.x 以前設定存在 data/settings.json：第一次啟動新版時複製過來（舊檔保留）
+_OLD_SETTINGS = DATA / "settings.json"
+if not SETTINGS.exists() and _OLD_SETTINGS.exists():
+    SETTINGS.write_bytes(_OLD_SETTINGS.read_bytes())
 
 # 用 pythonw 在背景跑時沒有主控台，錯誤訊息寫進 data/server.log 方便除錯
 if sys.stderr is None or sys.stdout is None:
@@ -44,7 +52,17 @@ if sys.stderr is None or sys.stdout is None:
 DEFAULT_SETTINGS = {
     "instructions": "請用繁體中文回答。數學式請用 LaTeX（行內 $...$，獨立式 $$...$$）。",
     "shortcut_prompt": True,      # 第一次開啟時詢問要不要建立桌面捷徑；回答過就不再問
+    # 背景（設計參考 Naiz Studio）：圖片放在 setting/images
+    "bg_image": "",               # 空字串 = 不使用背景
+    "bg_mode": "cover",           # cover 覆蓋／contain 完整／stretch 延展／center 置中／tile 並排／manual 自由
+    "bg_alpha": 35,               # 透明度 0～100（越大越明顯）
+    "bg_blur": 0,                 # 模糊 0～20 px（Gemini 建議：背景花俏時模糊一點比較好讀）
+    "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
+    "bg_scale": 100,              # 自由模式的縮放（%）
 }
+FOLDERS = {"output": OUTPUT, "images": BG_DIR, "setting": SETTING_DIR, "data": DATA}
+OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md、txt、csv、程式碼），請用 write_to_file 存到 {dir}\\ 資料夾，"
+               "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。")
 
 # ---------- 桌面捷徑 ----------
 SHORTCUT_NAME = "Antigravity UI.lnk"
@@ -625,6 +643,16 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/icon.png", "/icon.ico", "/favicon.ico"):
             name = "icon.png" if u.path == "/icon.png" else "icon.ico"
             return self.send_file(STATIC / name, "image/png" if name.endswith(".png") else "image/x-icon")
+        if u.path == "/api/backgrounds":
+            names = sorted(p.name for p in BG_DIR.iterdir() if p.is_file() and p.suffix.lower() in BG_EXTS)
+            return self.send_json({"images": names, "folder": str(BG_DIR)})
+        if u.path.startswith("/bg/"):
+            p = BG_DIR / unquote(u.path[4:])
+            if p.is_file() and inside(p, BG_DIR) and p.suffix.lower() in BG_EXTS:
+                return self.send_file(p)
+            return self.send_json({"error": "not found"}, 404)
+        if u.path == "/api/folders":
+            return self.send_json({k: str(v) for k, v in FOLDERS.items()})
         if u.path == "/api/shortcut":
             return self.send_json({"exists": (desktop_dir() / SHORTCUT_NAME).exists(),
                                    "prompt": bool(load_settings().get("shortcut_prompt", True))})
@@ -735,6 +763,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat(self.body())
         if u.path == "/api/update/install":
             return self.install_update()
+        if u.path == "/api/open_folder":          # 在檔案總管打開輸出、背景圖片、設定等資料夾
+            folder = FOLDERS.get(self.body().get("which"))
+            if not folder:
+                return self.send_json({"ok": False, "message": "不認得的資料夾"})
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(folder)
+            return self.send_json({"ok": True, "path": str(folder)})
+        if u.path == "/api/backgrounds/upload":    # 從設定面板直接加入背景圖片
+            d = self.body()
+            name = safe_name(d.get("name", "background.png"))
+            if Path(name).suffix.lower() not in BG_EXTS:
+                return self.send_json({"ok": False, "message": "只接受圖片檔（png、jpg、webp、gif、bmp）"})
+            dest, stem, suf, n = BG_DIR / name, Path(name).stem, Path(name).suffix, 2
+            while dest.exists():
+                dest = BG_DIR / f"{stem} ({n}){suf}"
+                n += 1
+            dest.write_bytes(base64.b64decode(d["data"].split(",", 1)[-1]))
+            return self.send_json({"ok": True, "name": dest.name})
         if u.path == "/api/shortcut/create":
             try:
                 lnk = create_shortcut()
@@ -842,11 +888,15 @@ class Handler(BaseHTTPRequestHandler):
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
             if prior:
                 instructions += "\n\n" + history_block(prior)
-        prompt = build_prompt(text + (SEARCH_HINT if d.get("search") else ""), files, instructions,
+        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=OUTPUT)
+        prompt = build_prompt(text + extra_hint, files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
         # agy 1.3.3 起讀工作區以外的檔案需要授權（非互動模式會直接拒絕），
         # 專案對話在專案資料夾裡跑，附件卻在 uploads：把 uploads 加進工作區
-        cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json", "--add-dir", str(UPLOADS)]
+        # output：讓 AI 能把產生的檔案存進去。主目錄在 agy 的「信任工作區」裡，檔案修改預設要人工審查，
+        # 非互動模式沒辦法審查就會被拒；accept-edits 只對工作區（cwd + --add-dir）內有效，主目錄其他地方照樣不能改
+        cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json",
+               "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
         if model:
             cmd += ["--model", model]
         # 不傳 --effort：模型 ID 本身已含強度（如 -high），另外加會衝突，Claude 也不支援
