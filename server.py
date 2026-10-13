@@ -439,9 +439,12 @@ SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並
 def load_settings():
     try:
         # utf-8-sig：使用者用記事本編輯過的檔案開頭可能有 BOM
-        return {**DEFAULT_SETTINGS, **json.loads(SETTINGS.read_text(encoding="utf-8-sig"))}
+        s = {**DEFAULT_SETTINGS, **json.loads(SETTINGS.read_text(encoding="utf-8-sig"))}
     except (OSError, ValueError):
         return dict(DEFAULT_SETTINGS)
+    if str(s.get("default_model", "")).startswith(RETIRED_MODELS):     # 預設模型已下架：改成替代模型
+        s["default_model"] = FALLBACK_MODEL
+    return s
 
 
 def get_usage():
@@ -490,44 +493,17 @@ def list_models(refresh=False):
         if "\t" in line:
             mid, name = line.split("\t", 1)
             models.append({"id": mid.strip(), "name": name.strip()})
-    if not models:
-        return models
-    # 官方清單沒列出、但其實還能用的模型（例如 agy 1.3.3 起清單裡沒有 Gemini 3.1 Pro，指定時照樣能用）：
-    # 記住看過的模型，沒列出的也照樣提供，名稱標「（未列出）」；真的不能用時 forget_model 會把它拿掉
-    seen = load_seen_models()
-    listed = {m["id"] for m in models}
-    seen.update({m["id"]: m["name"] for m in models})
-    save_seen_models(seen)
-    for mid, name in seen.items():
-        if mid not in listed and name and time.time() - MODEL_FAILED.get(mid, 0) > FAILED_HIDE:
-            base, level = re.match(r"^(.*?)(\s*\((?:Low|Medium|High)\))?$", name).groups()
-            models.append({"id": mid, "name": f"{base}（未列出）{level or ''}", "unlisted": True})
-    MODELS_CACHE.update(t=time.time(), data=models)
+    # 只提供 agy 官方清單裡的模型（Gemini 3.1 Pro 已被 Google 從一般方案移除，不再補回）
+    if models:
+        MODELS_CACHE.update(t=time.time(), data=models)
     return models
 
 
-SEEN_MODELS = DATA / "models_seen.json"
-KNOWN_HIDDEN = {"gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",     # 實測可用但官方清單沒列出
-                "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)"}
-
-
-def load_seen_models():
-    try:
-        return {**KNOWN_HIDDEN, **json.loads(SEEN_MODELS.read_text(encoding="utf-8"))}
-    except (OSError, ValueError):
-        return dict(KNOWN_HIDDEN)
-
-
-def save_seen_models(seen):
-    SEEN_MODELS.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
-
-
-MODEL_FAILED = {}           # 模型 id -> 失敗時間；未列出的模型失敗後先隱藏一段時間（可能只是 agy 正在更新）
-FAILED_HIDE = 600
+FALLBACK_MODEL = "gemini-3.8-flash-high"
+RETIRED_MODELS = ("gemini-3.1-pro",)     # 已下架：設定裡的預設模型若是這些，自動改成 FALLBACK_MODEL
 
 
 def forget_model(mid):
-    MODEL_FAILED[mid] = time.time()
     MODELS_CACHE.update(t=0, data=None)
 
 
@@ -1313,6 +1289,8 @@ class Handler(BaseHTTPRequestHandler):
         text, files = d.get("text", ""), d.get("files", [])
         files = [f for f in files if inside(f, ROOT)]
         model, cid = d.get("model"), d.get("conversation_id")
+        if model and model.startswith(RETIRED_MODELS):     # 舊分頁還選著已下架的模型：直接改用替代模型
+            model = FALLBACK_MODEL
         pr = load_project(d.get("project"))
         # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
         fork, old, prior = d.get("fork"), None, []

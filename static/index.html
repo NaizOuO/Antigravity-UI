@@ -844,7 +844,7 @@ $("#input").addEventListener("keydown", e => {
 $("#send").onclick = send;
 
 /* ---------- models / settings ---------- */
-// agy 的模型 ID 已經內含思考強度（例如 gemini-3.1-pro-high），不能再另外加 --effort。
+// agy 的模型 ID 已經內含思考強度（例如 gemini-3.8-flash-high），不能再另外加 --effort。
 // 這裡把清單拆成「模型家族 + 該家族實際有的強度」，所以選不出無效組合。
 const EFFORT_NAMES = {low:"低 (low)", medium:"中 (medium)", high:"高 (high)"};
 let families = [];   // [{key, name, variants:[{id, level}]}]
@@ -885,7 +885,13 @@ async function loadModels(refresh = true){
     sel.innerHTML = "";
     for (const f of families){ const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; sel.appendChild(o); }
     if (!families.length){ sel.innerHTML = `<option value="">（取不到模型清單，用預設）</option>`; return; }
-    if (!setModel(store.get("model", "gemini-3.1-pro-high"))) setModel(families[0].variants[0].id);
+    const saved = store.get("model", "gemini-3.8-flash-high");
+    if (!setModel(saved)){
+      if (!setModel("gemini-3.8-flash-high")) setModel(families[0].variants[0].id);
+      store.set("model", currentModel());
+      if (saved.startsWith("gemini-3.1-pro"))
+        toast("Gemini 3.1 Pro 已被 Google 從一般方案移除，已自動改用 " + modelLabel(currentModel()));
+    }
     if ($("#homeModel")) $("#homeModel").textContent = modelLabel(currentModel());
   } catch { sel.innerHTML = `<option value="">（伺服器未回應）</option>`; }
 }

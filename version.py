@@ -1,6 +1,6 @@
 """介面的版本；每次發布前更新（release.py 會自動改）。"""
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 
 def parse(text):
