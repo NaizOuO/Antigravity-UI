@@ -207,6 +207,37 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 #sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
 .slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
 .slider[hidden]{display:none}
+/* 設定：文字大小、對話寬度 */
+:root{--fs:15px;--chatw:860px}
+.wrap{max-width:var(--chatw)}
+.msg .bubble,#input,.editor textarea{font-size:var(--fs)}
+/* 設定面板：上方分類、開關、常駐指示 */
+.snav{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.snav button{border:0;border-radius:14px;padding:2px 12px;font-size:13px;color:var(--muted)}
+.snav button.on,.snav button:hover{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.sarea{width:100%;height:110px;font-size:13.5px}
+#sdlg select{padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);max-width:260px}
+.tg{position:relative;display:inline-block;width:40px;height:22px;flex:none;cursor:pointer}
+.tg input{opacity:0;width:0;height:0;position:absolute}
+.tg i{position:absolute;inset:0;border-radius:11px;background:var(--border);transition:.2s}
+.tg i::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.tg input:checked + i{background:var(--accent)}
+.tg input:checked + i::after{transform:translateX(18px)}
+#sdlg code{background:var(--code);padding:0 4px;border-radius:4px}
+/* 點公式複製 LaTeX */
+.tex{cursor:copy;border-radius:4px}
+.tex:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+/* 用量小工具（仿 Claude Code Usage Monitor） */
+#usageChip.umon,#usageChip{display:inline-flex;flex-direction:column;gap:1px;padding:3px 10px;line-height:1.25}
+.urow{display:flex;align-items:center;gap:7px;font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.urow .ul{width:16px;color:var(--muted);text-align:left}
+.segs{display:inline-flex;gap:2px}
+.segs i{width:7px;height:9px;border-radius:2px;background:color-mix(in srgb,var(--muted) 30%,transparent)}
+.segs i.f{background:#FF7A45}
+.segs i.f.hot{background:var(--danger)}
+.urow .uv{min-width:72px;text-align:right;color:var(--text)}
+.urow .uv.hot{color:var(--danger);font-weight:600}
+.ulabel{font-size:13px}
 #toast{position:fixed;left:50%;bottom:110px;transform:translate(-50%,12px);z-index:50;background:var(--panel);color:var(--text);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:9px 16px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.2s}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 .slider input{width:100%;accent-color:var(--accent)}
@@ -268,7 +299,7 @@ body.resizing{cursor:col-resize;user-select:none}
   <div id="projs"></div>
   <div class="sect"><span id="histLabel">對話</span></div>
   <div id="hist"></div>
-  <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a> · <a href="#" id="shortcutLink">建立桌面捷徑</a></div>
+  <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a> · <a href="#" id="verPrefs">⚙ 設定</a></div>
   <div id="sideResize" title="拖曳調整寬度（雙擊恢復預設）"></div>
 </aside>
 <main id="main">
@@ -281,7 +312,6 @@ body.resizing{cursor:col-resize;user-select:none}
     <button class="ghost on" id="updBtn" hidden></button>
     <button class="ghost" id="projChip" title="管理專案檔案與指示"></button>
     <button class="ghost" id="usageChip" title="查看用量">用量</button>
-    <button class="ghost" id="settingsBtn">常駐指示</button>
     <button class="ghost" id="outputBtn" title="打開 output 資料夾（對話中請 AI 產生的檔案都存在這裡）">📂 輸出</button>
     <button class="ghost" id="prefBtn" title="設定">⚙ 設定</button>
   </div>
@@ -306,12 +336,6 @@ body.resizing{cursor:col-resize;user-select:none}
     </div>
   </div>
 </main>
-<dialog id="dlg">
-  <h3 style="margin-top:0">常駐指示</h3>
-  <p style="font-size:13px;color:var(--muted);margin-top:0">每個新對話的第一則訊息前會自動附上這段文字。</p>
-  <textarea id="instr"></textarea>
-  <div class="r"><button id="dlgCancel">取消</button><button id="dlgSave">儲存</button></div>
-</dialog>
 <dialog id="pdlg" class="tall">
   <h3 style="margin-top:0">專案設定</h3>
   <div class="dbody">
@@ -350,9 +374,27 @@ body.resizing{cursor:col-resize;user-select:none}
 </dialog>
 <dialog id="sdlg" class="tall wide">
   <div class="dhead"><h3>⚙ 設定</h3><button id="sClose" class="x" title="關閉（未儲存的變更會還原）">✕</button></div>
-  <div class="dbody">
-    <section>
+  <nav class="snav" id="snav"></nav>
+  <div class="dbody" id="sbody">
+    <section data-title="一般">
+      <h4>一般</h4>
+      <div class="srow"><b>送出訊息</b><span class="sp"></span>
+        <span class="seg" data-key="send_key"><button data-v="enter">Enter 送出</button><button data-v="ctrl_enter">Ctrl+Enter 送出</button></span></div>
+      <p class="note">選「Ctrl+Enter 送出」時，Enter 是換行，打長篇推導或貼程式碼不會手滑送出。</p>
+      <div class="srow"><b>新對話的預設模型</b><span class="sp"></span><select data-key="default_model" id="defModel"></select></div>
+      <p class="note">選「沿用上次用的」時，會記住你最後選的模型。</p>
+      <div class="srow"><b>新對話預設開啟聯網搜尋</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="default_search"><i></i></label></div>
+      <div class="srow"><b>常駐指示</b></div>
+      <p class="note">每個新對話的第一則訊息前會自動附上這段文字（例如你的科系、回答語言、偏好的說明方式）。</p>
+      <textarea data-key="instructions" class="sarea"></textarea>
+    </section>
+    <section data-title="外觀">
       <h4>外觀</h4>
+      <div class="srow"><b>文字大小</b><span class="sp"></span>
+        <span class="seg" data-key="font_size"><button data-v="small">小</button><button data-v="normal">標準</button><button data-v="large">大</button></span></div>
+      <div class="srow"><b>對話寬度</b><span class="sp"></span>
+        <span class="seg" data-key="chat_width"><button data-v="narrow">窄</button><button data-v="normal">標準</button><button data-v="wide">寬</button><button data-v="full">滿版</button></span></div>
+      <p class="note">讀長篇推導用「窄」或「標準」比較不累；貼表格或程式碼可以用「寬」。</p>
       <div class="srow"><b>背景圖片</b><span class="meta" id="bgCount"></span>
         <span class="sp"></span><button id="bgAdd">＋ 加入圖片</button><button id="bgFolder">開啟圖片資料夾</button></div>
       <p class="note">把圖片放進圖片資料夾（setting\images），或按「加入圖片」，就能在下面選擇使用。</p>
@@ -371,12 +413,38 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="slider man"><span>縮放</span><input type="range" id="bgScale" min="10" max="300" step="5"><output></output></div>
       <p class="note">有背景時，對話文字、公式和程式碼會加上半透明底色，避免背景影響閱讀。</p>
     </section>
-    <section>
-      <h4>檔案與資料夾</h4>
-      <div class="srow"><b>輸出資料夾</b><span class="sp"></span><button data-folder="output">開啟</button></div>
-      <p class="note">請 AI「輸出成檔案」時（md、csv、程式碼…）會存在主目錄的 output 資料夾。</p>
-      <div class="srow"><b>設定資料夾</b><span class="sp"></span><button data-folder="setting">開啟</button></div>
-      <p class="note">setting 資料夾存放設定（config.json）與背景圖片；output、setting、data 都不會被更新覆蓋。</p>
+    <section data-title="回覆與公式">
+      <h4>回覆與公式</h4>
+      <div class="srow"><b>回答完成時播放提示音</b><span class="sp"></span><button id="testSound">試聽</button><label class="tg"><input type="checkbox" data-key="notify_sound"><i></i></label></div>
+      <div class="srow"><b>回答完成時在分頁標題提醒</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="notify_title"><i></i></label></div>
+      <p class="note">只在你切到其他視窗或分頁時提醒（例如等 Pro 長推導時去看講義）。</p>
+      <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
+      <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
+    </section>
+    <section data-title="用量">
+      <h4>用量</h4>
+      <div class="srow"><b>額度不足提醒</b><span class="sp"></span>
+        <span class="seg" data-key="quota_warn"><button data-v="0">不提醒</button><button data-v="10">10%</button><button data-v="15">15%</button><button data-v="25">25%</button></span></div>
+      <p class="note">目前模型那一組的 5 小時或每週額度剩下低於這個比例時，上方會出現提醒，避免趕作業時突然被限流。</p>
+    </section>
+    <section data-title="資料">
+      <h4>資料</h4>
+      <div class="srow"><b>匯出目前對話</b><span class="sp"></span><button id="exportBtn">匯出成 Markdown</button></div>
+      <p class="note">存到 output 資料夾，可以放進 Notion、Obsidian 或報告裡。</p>
+      <div class="srow"><b>備份全部資料</b><span class="sp"></span><button id="backupBtn">建立備份</button></div>
+      <p class="note">把對話、專案（含上傳的檔案與記憶）和設定打包成一個 zip，存到 output 資料夾。換電腦時很方便。</p>
+      <div class="srow"><b>匯入備份</b><span class="sp"></span><button id="importBtn">選擇備份檔</button><input type="file" id="importFile" accept=".zip" hidden></div>
+      <p class="note">只會補上目前沒有的對話、專案和設定，已經存在的不會被覆蓋。</p>
+      <div class="srow"><b>資料夾</b><span class="sp"></span><button data-folder="output">輸出</button><button data-folder="setting">設定</button><button data-folder="data">資料</button></div>
+      <p class="note">output、setting、data 都是你的個人資料，更新時不會被動到。</p>
+    </section>
+    <section data-title="更新與關於">
+      <h4>更新與關於</h4>
+      <div class="srow"><b>開啟時檢查新版本</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="update_check"><i></i></label></div>
+      <div class="srow"><button id="sCheckUpd">立即檢查</button><span class="meta" id="sUpdText"></span></div>
+      <div class="srow"><button id="sShortcut">建立桌面捷徑</button><span class="meta" id="sShortcutText"></span></div>
+      <div class="srow"><b id="sVersion">Antigravity UI</b><span class="sp"></span>
+        <button id="sReadme">說明文件</button><button id="sGithub">GitHub</button></div>
     </section>
   </div>
   <div class="r" style="justify-content:space-between;align-items:center">
@@ -424,7 +492,9 @@ function renderMd(src){
   let html = DOMPurify.sanitize(marked.parse(src, {gfm:true, breaks:false}));
   html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
     const m = maths[i];
-    try { return katex.renderToString(m.tex, {displayMode:m.display, throwOnError:false}); }
+    // 包一層 .tex 並記下原始碼：設定開啟時點公式可以複製 LaTeX
+    try { return `<span class="tex" data-display="${m.display ? 1 : 0}" data-tex="${escapeHtml(m.tex)}">`
+                 + katex.renderToString(m.tex, {displayMode:m.display, throwOnError:false}) + `</span>`; }
     catch { return m.tex; }
   });
   // agy 回覆裡的 file:/// 連結改成走本機伺服器
@@ -654,6 +724,7 @@ async function runTurn(text, files, fork){
   a.bubble.classList.remove("typing");
   st.end();
   setRunning(false); scrollDown(); loadHistory(); refreshUsage();
+  notifyDone(!!reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
 }
@@ -710,7 +781,10 @@ document.addEventListener("drop", e => { if (!$("#pdlg").open && e.dataTransfer?
 function autoGrow(){ const t = $("#input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; }
 $("#input").addEventListener("input", autoGrow);
 $("#input").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); }
+  if (e.key !== "Enter" || e.isComposing) return;
+  if (savedPrefs.send_key === "ctrl_enter"){           // Ctrl+Enter 送出，Enter 換行
+    if (e.ctrlKey || e.metaKey){ e.preventDefault(); send(); }
+  } else if (!e.shiftKey){ e.preventDefault(); send(); }
 });
 $("#send").onclick = send;
 
@@ -765,15 +839,6 @@ $("#family").onchange = e => {
   fillEffort(fam, null); store.set("model", currentModel()); paintUsage();
 };
 $("#effort").onchange = () => { store.set("model", currentModel()); paintUsage(); };
-$("#settingsBtn").onclick = async () => {
-  $("#instr").value = (await (await fetch("/api/settings")).json()).instructions || "";
-  $("#dlg").showModal();
-};
-$("#dlgCancel").onclick = () => $("#dlg").close();
-$("#dlgSave").onclick = async () => {
-  await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({instructions:$("#instr").value})});
-  $("#dlg").close();
-};
 
 /* ---------- web search toggle ---------- */
 let searchOn = store.get("search", "0") === "1";
@@ -791,17 +856,29 @@ async function refreshUsage(){
     const j = await (await fetch("/api/usage")).json();
     if (j.groups) usage = j;
   } catch {}
-  paintUsage();
+  paintUsage(); checkQuota();
+}
+// 用量小工具（仿 Claude Code Usage Monitor）：5h／7d 兩條 10 格的進度條，顯示「已用 %」與重置倒數
+function countdown(iso){
+  const s = Math.max(0, (new Date(iso) - Date.now()) / 1000);
+  return s < 3600 ? `${Math.max(1, Math.round(s / 60))}分` : s < 86400 ? `${Math.round(s / 3600)}時` : `${Math.round(s / 86400)}天`;
 }
 function paintUsage(){
   const chip = $("#usageChip");
-  if (!usage){ chip.textContent = "用量"; return; }
+  if (!usage){ chip.innerHTML = `<span class="ulabel">用量</span>`; return; }
   const g = usage.groups[groupOf(currentModel())] || usage.groups[0];
-  const b = Object.fromEntries(g.buckets.map(x => [x.window, x]));
-  chip.textContent = `用量 5h ${pct(b["5h"]?.remaining_fraction)}% · 週 ${pct(b.weekly?.remaining_fraction)}%`;
-  chip.title = `${g.name}：剩餘額度（點開看詳細）`;
+  const rows = [["5h", g.buckets.find(x => x.window === "5h")], ["7d", g.buckets.find(x => x.window === "weekly")]];
+  chip.innerHTML = rows.filter(([, b]) => b).map(([label, b]) => {
+    const used = Math.min(100, Math.max(0, Math.round((1 - (b.remaining_fraction ?? 1)) * 100)));
+    const filled = used > 0 ? Math.max(1, Math.round(used / 10)) : 0, hot = used >= 85 ? " hot" : "";
+    const segs = Array.from({length:10}, (_, i) => `<i class="${i < filled ? "f" + hot : ""}"></i>`).join("");
+    return `<span class="urow"><span class="ul">${label}</span><span class="segs">${segs}</span><span class="uv${hot}">${used}% · ${countdown(b.reset_time)}</span></span>`;
+  }).join("");
+  chip.title = `${g.name}：已用比例與重置倒數（點開看詳細）`;
   if ($("#udlg").open) paintUsageDialog();
 }
+setInterval(paintUsage, 30 * 1000);              // 倒數每 30 秒更新
+setInterval(() => { if (!running) refreshUsage(); }, 5 * 60 * 1000);   // 用量每 5 分鐘重抓
 function paintUsageDialog(){
   const body = $("#ubody");
   if (!usage){ body.textContent = "讀取失敗，請按重新整理。"; return; }
@@ -1016,6 +1093,13 @@ $("#pmemRebuild").onclick = async () => {
 
 /* ---------- 版本與更新 ---------- */
 let updInfo = null;
+async function checkVersionOnly(){       // 關閉「開啟時檢查新版本」時：只顯示版本號
+  try {
+    const v = await (await fetch("/api/version")).json();
+    $("#verText").textContent = $("#verBadge").textContent = "v" + v.version;
+    document.title = `Antigravity 介面 v${v.version}`;
+  } catch {}
+}
 async function checkUpdate(force){
   try {
     const v = await (await fetch("/api/version")).json();
@@ -1031,9 +1115,11 @@ async function checkUpdate(force){
   $("#verBadge").classList.toggle("new", !!updInfo.available);
   $("#verBadge").textContent = updInfo.available ? `v${updInfo.current} → v${updInfo.latest}` : `v${updInfo.current}`;
   $("#verBadge").title = updInfo.available ? "有新版本，點這裡更新" : "檢查更新";
+  $("#sUpdText").textContent = updInfo.available ? `有新版本 v${updInfo.latest}` : updInfo.error ? "連不上 GitHub，請確認網路後再試" : `目前已經是最新版（v${updInfo.current}）`;
+  $("#sVersion").textContent = `Antigravity UI v${updInfo.current}`;
   if (force){
     if (updInfo.available) openUpdateDialog();
-    else alert(updInfo.error || `已經是最新版（v${updInfo.current}）。`);
+    else toast(updInfo.error ? "連不上 GitHub，請確認網路後再試" : `已經是最新版（v${updInfo.current}）`);
   }
 }
 function openUpdateDialog(){
@@ -1052,7 +1138,7 @@ async function createShortcut(){
   alert(r.ok ? `已在桌面建立捷徑：\n${r.path}` : r.message);
   paintShortcutLink(r.ok);
 }
-function paintShortcutLink(exists){ $("#shortcutLink").textContent = exists ? "重新建立捷徑" : "建立桌面捷徑"; }
+function paintShortcutLink(exists){ $("#sShortcut").textContent = exists ? "重新建立桌面捷徑" : "建立桌面捷徑"; }
 async function checkShortcut(){
   let s; try { s = await (await fetch("/api/shortcut")).json(); } catch { return; }
   paintShortcutLink(s.exists);
@@ -1061,7 +1147,7 @@ async function checkShortcut(){
 const noMorePrompt = () => post("/api/settings", {shortcut_prompt:false});
 $("#scYes").onclick = async () => { $("#scdlg").close(); await noMorePrompt(); createShortcut(); };
 $("#scNo").onclick = () => { $("#scdlg").close(); noMorePrompt(); };
-$("#shortcutLink").onclick = e => { e.preventDefault(); createShortcut(); };
+$("#sShortcut").onclick = () => createShortcut();
 $("#updLater").onclick = () => $("#updlg").close();
 $("#updGo").onclick = async () => {
   if (running){ alert("還有回覆在生成中，等它完成再更新。"); return; }
@@ -1180,6 +1266,9 @@ async function fillHome(){
 function newConv(){
   if (running) return;
   convId = null;
+  // 設定裡的「新對話預設模型／聯網搜尋」
+  if (savedPrefs.default_model && setModel(savedPrefs.default_model)) store.set("model", currentModel());
+  if (savedPrefs.default_search !== undefined && !!savedPrefs.default_search !== searchOn) $("#searchBtn").click();
   $("#list").innerHTML = emptyState(); fillHome();
   $("#side").classList.remove("open"); loadHistory(); rebuildOutline(); $("#input").focus();
 }
@@ -1259,9 +1348,45 @@ function applyBackground(p){
 async function loadPrefs(){
   try { savedPrefs = await (await fetch("/api/settings")).json(); } catch { savedPrefs = {}; }
   prefs = {...savedPrefs};
-  applyBackground(prefs);
+  applyPrefs(prefs);
+}
+// 外觀類設定即時套用（預覽）；其他設定在用到的地方讀 savedPrefs
+const FONT = {small:"14px", normal:"15px", large:"17px"};
+const WIDTH = {narrow:"720px", normal:"860px", wide:"1120px", full:"none"};
+function applyPrefs(p){
+  applyBackground(p);
+  document.documentElement.style.setProperty("--fs", FONT[p.font_size] || FONT.normal);
+  document.documentElement.style.setProperty("--chatw", WIDTH[p.chat_width] || WIDTH.normal);
+  $("#input").placeholder = p.send_key === "ctrl_enter" ? "問點什麼…（Ctrl+Enter 送出，Enter 換行）" : "問點什麼…（Enter 送出，Shift+Enter 換行）";
+}
+// 一般的設定控制項：checkbox／select／textarea 用 data-key，分段按鈕用 .seg[data-key] > button[data-v]
+function paintControls(){
+  document.querySelectorAll("#sdlg [data-key]").forEach(el => {
+    const k = el.dataset.key, v = prefs[k];
+    if (el.classList.contains("seg")) el.querySelectorAll("button").forEach(b => b.classList.toggle("on", String(v) === b.dataset.v));
+    else if (el.type === "checkbox") el.checked = !!v;
+    else if (document.activeElement !== el) el.value = v ?? "";
+  });
+}
+function bindControls(){
+  document.querySelectorAll("#sdlg [data-key]").forEach(el => {
+    const k = el.dataset.key;
+    if (el.classList.contains("seg")) el.querySelectorAll("button").forEach(b => b.onclick = () => {
+      prefs[k] = typeof savedPrefs[k] === "number" ? +b.dataset.v : b.dataset.v; applyPrefs(prefs); paintPrefs();
+    });
+    else el.addEventListener(el.tagName === "TEXTAREA" ? "input" : "change", () => {
+      prefs[k] = el.type === "checkbox" ? el.checked : el.value; applyPrefs(prefs); paintPrefs();
+    });
+  });
+}
+function fillDefaultModel(){
+  const sel = $("#defModel"); sel.innerHTML = `<option value="">沿用上次用的</option>`;
+  for (const f of families) for (const v of f.variants){
+    const o = document.createElement("option"); o.value = v.id; o.textContent = f.name + (v.level ? ` · ${v.level}` : ""); sel.appendChild(o);
+  }
 }
 function paintPrefs(){
+  paintControls();
   document.querySelectorAll("#bgMode button").forEach(b => b.classList.toggle("on", b.dataset.v === (prefs.bg_mode || "cover")));
   $("#bgModeNote").textContent = BG_NOTES[prefs.bg_mode || "cover"];
   $("#bgModeNote").style.color = prefs.bg_mode === "stretch" ? "#FF7A45" : "";
@@ -1273,8 +1398,8 @@ function paintPrefs(){
   const m = prefs.bg_mode || "cover";
   document.querySelectorAll("#sdlg .slider.pos").forEach(r => r.hidden = !(m === "center" || m === "manual"));
   document.querySelectorAll("#sdlg .slider.man").forEach(r => r.hidden = m !== "manual");
-  const dirty = BG_KEYS.some(k => (prefs[k] ?? "") !== (savedPrefs[k] ?? ""));
-  $("#sStatus").textContent = dirty ? "● 有尚未儲存的變更（目前是預覽）" : "";
+  const dirty = Object.keys(prefs).some(k => (prefs[k] ?? "") !== (savedPrefs[k] ?? ""));
+  $("#sStatus").textContent = dirty ? "● 有尚未儲存的變更（外觀是預覽）" : "";
 }
 async function paintBgList(){
   const j = await (await fetch("/api/backgrounds")).json();
@@ -1289,11 +1414,26 @@ async function paintBgList(){
     list.appendChild(row);
   }
 }
-async function openPrefs(){
-  await loadPrefs(); paintPrefs(); await paintBgList();
+async function openPrefs(section){
+  await loadPrefs(); fillDefaultModel(); paintPrefs(); await paintBgList();
+  checkUpdate(false);
   $("#sdlg").showModal();
+  if (section) [...document.querySelectorAll("#sbody section")].find(s => s.dataset.title === section)?.scrollIntoView();
 }
-$("#prefBtn").onclick = openPrefs;
+$("#prefBtn").onclick = () => openPrefs();
+$("#verPrefs").onclick = e => { e.preventDefault(); openPrefs(); };
+bindControls();
+// 左側分類：點了捲到那一區；捲動時標示目前所在的區塊
+document.querySelectorAll("#sbody section").forEach(s => {
+  const b = document.createElement("button"); b.textContent = s.dataset.title;
+  b.onclick = () => $("#sbody").scrollTo({top: s.offsetTop - $("#sbody").offsetTop, behavior:"smooth"});
+  $("#snav").appendChild(b);
+});
+$("#sbody").addEventListener("scroll", () => {
+  const top = $("#sbody").scrollTop + $("#sbody").offsetTop + 30, secs = [...document.querySelectorAll("#sbody section")];
+  let cur = 0; secs.forEach((s, i) => { if (s.offsetTop <= top) cur = i; });
+  [...$("#snav").children].forEach((b, i) => b.classList.toggle("on", i === cur));
+});
 document.querySelectorAll("#bgMode button").forEach(b => b.onclick = () => { prefs.bg_mode = b.dataset.v; applyBackground(prefs); paintPrefs(); });
 for (const [id, key] of [["bgAlpha","bg_alpha"],["bgBlur","bg_blur"],["bgX","bg_x"],["bgY","bg_y"],["bgScale","bg_scale"]])
   $("#" + id).addEventListener("input", e => { prefs[key] = +e.target.value; applyBackground(prefs); paintPrefs(); });
@@ -1310,20 +1450,100 @@ $("#bgFile").onchange = async e => {
   if (last){ prefs.bg_image = last; applyBackground(prefs); }
   paintBgList(); paintPrefs();
 };
-$("#sRevert").onclick = () => { prefs = {...savedPrefs}; applyBackground(prefs); paintPrefs(); paintBgList(); };
+$("#sRevert").onclick = () => { prefs = {...savedPrefs}; applyPrefs(prefs); paintPrefs(); paintBgList(); };
 $("#sSave").onclick = async () => {
-  const body = Object.fromEntries(BG_KEYS.map(k => [k, prefs[k]]).filter(([, v]) => v !== undefined));
-  savedPrefs = await post("/api/settings", body); prefs = {...savedPrefs};
-  paintPrefs(); $("#sStatus").textContent = "✔ 已儲存";
+  savedPrefs = await post("/api/settings", prefs); prefs = {...savedPrefs};
+  applyPrefs(prefs); paintPrefs(); $("#sStatus").textContent = "✔ 已儲存"; checkQuota(true);
 };
-const closePrefs = () => { prefs = {...savedPrefs}; applyBackground(prefs); $("#sdlg").close(); };   // 沒儲存就關掉：還原
+const closePrefs = () => {
+  const dirty = Object.keys(prefs).some(k => (prefs[k] ?? "") !== (savedPrefs[k] ?? ""));
+  if (dirty && !confirm("有尚未儲存的變更，確定要關閉？（變更會還原）")) return;
+  prefs = {...savedPrefs}; applyPrefs(prefs); $("#sdlg").close();
+};
 $("#sClose").onclick = closePrefs;
 $("#sdlg").addEventListener("cancel", e => { e.preventDefault(); closePrefs(); });
 
-loadPrefs();
+/* 資料：匯出、備份、匯入 */
+$("#exportBtn").onclick = async () => {
+  if (!convId) return toast("先打開一段對話，再匯出");
+  const r = await post("/api/export", {id:convId});
+  toast(r.ok ? `📄 已匯出到 output：${r.name}` : r.message);
+};
+$("#backupBtn").onclick = async () => {
+  const b = $("#backupBtn"); b.disabled = true; b.textContent = "備份中…";
+  try { const r = await post("/api/backup", {}); toast(r.ok ? `🗄 已建立備份（${r.size}）：${r.name}` : r.message); }
+  finally { b.disabled = false; b.textContent = "建立備份"; }
+};
+$("#importBtn").onclick = () => $("#importFile").click();
+$("#importFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f || !confirm(`匯入「${f.name}」？\n只會補上目前沒有的對話、專案和設定，已經存在的不會被覆蓋。`)) return;
+  const data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(f); });
+  const r = await post("/api/import", {data});
+  if (!r.ok) return alert(r.message);
+  toast(`✔ 匯入完成：新增 ${r.added} 個檔案，略過 ${r.skipped} 個已存在的`);
+  loadProjects(); loadHistory();
+};
+$("#sCheckUpd").onclick = () => checkUpdate(true);
+$("#sReadme").onclick = () => window.open("https://github.com/NaizOuO/Antigravity-UI#readme", "_blank");
+$("#sGithub").onclick = () => window.open("https://github.com/NaizOuO/Antigravity-UI", "_blank");
+
+/* 回答完成提醒：視窗不在前面時，提示音＋分頁標題 */
+function beep(){
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [880, 1320].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + i * 0.13;
+      o.type = "sine"; o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+      o.start(t); o.stop(t + 0.26);
+    });
+  } catch {}
+}
+$("#testSound").onclick = beep;
+let titleTimer = null, baseTitle = document.title;
+function notifyDone(ok){
+  if (document.hasFocus() && !document.hidden) return;
+  if (savedPrefs.notify_sound !== false) beep();
+  if (savedPrefs.notify_title !== false && !titleTimer){
+    baseTitle = document.title; let on = false;
+    titleTimer = setInterval(() => { document.title = (on = !on) ? (ok ? "✔ 回答完成" : "⚠ 回答失敗") : baseTitle; }, 900);
+  }
+}
+const stopTitle = () => { if (titleTimer){ clearInterval(titleTimer); titleTimer = null; document.title = baseTitle; } };
+window.addEventListener("focus", stopTitle);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) stopTitle(); });
+
+/* 點公式複製 LaTeX */
+$("#list").addEventListener("click", e => {
+  const el = e.target.closest(".tex");
+  if (!el || savedPrefs.latex_copy === false) return;
+  const tex = el.dataset.tex, src = el.dataset.display === "1" ? `$$${tex}$$` : `$${tex}$`;
+  navigator.clipboard.writeText(src).then(() => toast("📋 已複製 LaTeX：" + (src.length > 60 ? src.slice(0, 60) + "…" : src)),
+                                       () => toast("複製失敗：瀏覽器不允許存取剪貼簿"));
+});
+
+/* 額度不足提醒 */
+const warned = new Set();
+function checkQuota(reset){
+  if (reset) warned.clear();
+  const th = +(savedPrefs.quota_warn ?? 15);
+  if (!usage || !th) return;
+  const g = usage.groups[groupOf(currentModel())]; if (!g) return;
+  for (const b of g.buckets){
+    const left = Math.round((b.remaining_fraction ?? 1) * 100), key = g.name + b.window;
+    if (left < th && !warned.has(key)){
+      warned.add(key);
+      $("#banner").hidden = false;
+      $("#banner").textContent = `⚠ ${g.name} 的${b.window === "5h" ? " 5 小時" : "每週"}額度只剩 ${left}%（${localTime(b.reset_time)} 完全恢復）。可以改用另一組模型，或先存好重要的對話。`;
+    }
+  }
+}
+
+loadPrefs().then(() => { if (savedPrefs.update_check !== false) checkUpdate(false); else checkVersionOnly(); });
 loadModels().then(refreshUsage);
 loadProjects().then(() => { if (!convId && $("#empty")) { $("#list").innerHTML = emptyState(); fillHome(); } });
-loadHistory(); checkUpdate(false); checkShortcut(); $("#input").focus();
+loadHistory(); checkShortcut(); $("#input").focus();
 </script>
 </body>
 </html>

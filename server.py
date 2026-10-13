@@ -59,7 +59,77 @@ DEFAULT_SETTINGS = {
     "bg_blur": 0,                 # 模糊 0～20 px（Gemini 建議：背景花俏時模糊一點比較好讀）
     "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
     "bg_scale": 100,              # 自由模式的縮放（%）
+    # 一般
+    "send_key": "enter",          # enter：Enter 送出／ctrl_enter：Ctrl+Enter 送出、Enter 換行
+    "default_model": "",          # 新對話的預設模型；空字串 = 沿用上次用的
+    "default_search": False,      # 新對話預設開啟聯網搜尋
+    # 外觀
+    "font_size": "normal",        # small／normal／large
+    "chat_width": "normal",       # narrow／normal／wide／full
+    # 回覆
+    "notify_sound": True,         # 回答完成時（視窗不在前面）播放提示音
+    "notify_title": True,         # 回答完成時分頁標題提醒
+    "latex_copy": True,           # 點公式複製 LaTeX 原始碼
+    # 用量
+    "quota_warn": 15,             # 目前模型的額度剩下低於幾 % 時提醒（0 = 不提醒）
+    # 更新
+    "update_check": True,         # 開啟時檢查新版本
 }
+# ---------- 匯出、備份、匯入 ----------
+def export_markdown(h):
+    """把一段對話存成 Markdown 到 output 資料夾，回傳檔案路徑。"""
+    fmt = lambda t: datetime.fromtimestamp(t or time.time()).strftime("%Y-%m-%d %H:%M")
+    lines = [f"# {h.get('title') or '對話'}", "",
+             f"> 建立：{fmt(h.get('created'))}　最後更新：{fmt(h.get('updated'))}　模型：{h.get('model') or ''}", ""]
+    for m in h.get("messages", []):
+        lines.append("## 🙋 我" if m["role"] == "user" else "## 🤖 AI")
+        lines += ["", m.get("text") or ""]
+        if m.get("files"):
+            lines.append("\n附件：" + "、".join(Path(f).name for f in m["files"]))
+        lines.append("")
+    name = safe_name(re.sub(r"\s+", " ", h.get("title") or "對話"))[:60]
+    dest = OUTPUT / f"{name}.md"
+    n = 2
+    while dest.exists():
+        dest = OUTPUT / f"{name} ({n}).md"
+        n += 1
+    dest.write_text("\n".join(lines), encoding="utf-8")
+    return dest
+
+
+def backup_all():
+    """把 data/（對話、專案、附件）和 setting/（設定、背景）打包成 output/備份_日期.zip。"""
+    import zipfile
+    dest = OUTPUT / f"Antigravity備份_{datetime.now():%Y%m%d_%H%M}.zip"
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        for base in (DATA, SETTING_DIR):
+            for p in base.rglob("*"):
+                if p.is_file() and p.name not in ("server.log", "update_download.zip"):
+                    zf.write(p, p.relative_to(ROOT).as_posix())
+    return dest
+
+
+def import_backup(raw):
+    """匯入備份 zip：只補上「目前沒有」的檔案，已經存在的一律不覆蓋。回傳 (新增數, 略過數)。"""
+    import io
+    import zipfile
+    added = skipped = 0
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        for name in zf.namelist():
+            p = Path(name)
+            if name.endswith("/") or p.is_absolute() or ".." in p.parts or p.parts[0] not in ("data", "setting"):
+                continue
+            dest = ROOT / p
+            if dest.exists() or not inside(dest, ROOT):
+                skipped += 1
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(name))
+            added += 1
+    MODELS_CACHE.update(t=0, data=None)
+    return added, skipped
+
+
 def _explorer_windows():
     """目前所有檔案總管視窗：{hwnd: 標題}。"""
     import ctypes
@@ -841,6 +911,23 @@ class Handler(BaseHTTPRequestHandler):
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_front(folder)
             return self.send_json({"ok": True, "path": str(folder)})
+        if u.path == "/api/export":                # 目前對話存成 Markdown 到 output
+            h = load_hist(self.body().get("id", ""))
+            if not h:
+                return self.send_json({"ok": False, "message": "找不到這段對話"})
+            dest = export_markdown(h)
+            return self.send_json({"ok": True, "name": dest.name, "path": str(dest)})
+        if u.path == "/api/backup":
+            dest = backup_all()
+            return self.send_json({"ok": True, "name": dest.name, "path": str(dest),
+                                   "size": human_size(dest.stat().st_size)})
+        if u.path == "/api/import":
+            try:
+                added, skipped = import_backup(base64.b64decode(self.body()["data"].split(",", 1)[-1]))
+            except Exception as e:
+                return self.send_json({"ok": False, "message": f"匯入失敗（不是有效的備份檔？）：{e}"})
+            sync_transcripts()
+            return self.send_json({"ok": True, "added": added, "skipped": skipped})
         if u.path == "/api/backgrounds/upload":    # 從設定面板直接加入背景圖片
             d = self.body()
             name = safe_name(d.get("name", "background.png"))
