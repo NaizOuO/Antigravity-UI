@@ -442,8 +442,8 @@ def load_settings():
         s = {**DEFAULT_SETTINGS, **json.loads(SETTINGS.read_text(encoding="utf-8-sig"))}
     except (OSError, ValueError):
         return dict(DEFAULT_SETTINGS)
-    if str(s.get("default_model", "")).startswith(RETIRED_MODELS):     # 預設模型已下架：改成替代模型
-        s["default_model"] = FALLBACK_MODEL
+    if s.get("default_model"):           # 預設模型已下架：改成替代模型（用已經抓到的清單，不在這裡呼叫 agy）
+        s["default_model"] = replacement_model(s["default_model"], available_ids(fetch=False))
     return s
 
 
@@ -500,7 +500,40 @@ def list_models(refresh=False):
 
 
 FALLBACK_MODEL = "gemini-3.8-flash-high"
-RETIRED_MODELS = ("gemini-3.1-pro",)     # 已下架：設定裡的預設模型若是這些，自動改成 FALLBACK_MODEL
+RETIRED_MODELS = ("gemini-3.1-pro",)     # 已確定下架：連清單都還沒抓到時也直接換掉
+
+
+def _model_version(mid):
+    return [int(n) for n in re.findall(r"\d+", mid)]
+
+
+def replacement_model(mid, ids):
+    """模型被下架時的替代：同系列最新版優先（Opus → 較新的 Opus → Sonnet），其次 Gemini Flash。
+    例如 11/2 Claude 4.6 下架後，claude-opus-4-6-thinking 會換成清單裡的 claude-opus-5-5-…。"""
+    if not mid or mid in ids:
+        return mid
+    if not ids:
+        return FALLBACK_MODEL if mid.startswith(RETIRED_MODELS) else mid
+    level = (re.search(r"-(low|medium|high)$", mid) or [None, "high"])[1]
+    order = {"claude-opus": ["claude-opus", "claude-sonnet"],
+             "claude-sonnet": ["claude-sonnet", "claude-opus"]}
+    for prefix in next((v for k, v in order.items() if mid.startswith(k)), []) + ["gemini"]:
+        same = [i for i in ids if i.startswith(prefix)]
+        if prefix == "gemini":           # Gemini：優先 Flash、同樣的思考強度
+            same.sort(key=lambda i: ("flash" in i, i.endswith("-" + level), _model_version(i)), reverse=True)
+        else:                            # Claude：最新版、有 thinking 的優先
+            same.sort(key=lambda i: (_model_version(i), "thinking" in i), reverse=True)
+        if same:
+            return same[0]
+    return ids[0]
+
+
+def available_ids(fetch=True):
+    try:
+        data = (list_models() if fetch else None) or MODELS_CACHE["data"] or []
+    except (OSError, subprocess.SubprocessError):
+        data = MODELS_CACHE["data"] or []
+    return [m["id"] for m in data]
 
 
 def forget_model(mid):
@@ -998,7 +1031,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"models": [], "error": AGY_MISSING})
             try:
                 models = list_models(refresh=q.get("refresh", ["0"])[0] == "1")
-                return self.send_json({"models": models, "error": None if models else
+                want = q.get("want", [""])[0]         # 介面上次選的模型；若已下架，告訴介面該換成哪個
+                return self.send_json({"models": models,
+                                       "replace": replacement_model(want, [m["id"] for m in models]) if want else "",
+                                       "error": None if models else
                                        "agy 沒有回傳模型清單，可能還沒登入。請在終端機執行一次 `agy` 完成登入後再重新整理。"})
             except Exception as e:
                 return self.send_json({"models": [], "error": str(e)})
@@ -1289,8 +1325,8 @@ class Handler(BaseHTTPRequestHandler):
         text, files = d.get("text", ""), d.get("files", [])
         files = [f for f in files if inside(f, ROOT)]
         model, cid = d.get("model"), d.get("conversation_id")
-        if model and model.startswith(RETIRED_MODELS):     # 舊分頁還選著已下架的模型：直接改用替代模型
-            model = FALLBACK_MODEL
+        # 舊分頁還選著已下架的模型：直接改用替代模型，不浪費時間重試
+        asked, model = model, replacement_model(model, available_ids())
         pr = load_project(d.get("project"))
         # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
         fork, old, prior = d.get("fork"), None, []
@@ -1343,6 +1379,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
         emit({"event": "run", "run_id": run_id})
+        if asked and model != asked:
+            emit({"event": "model_switched", "from": asked, "to": model})
         # agy 1.3.3 的模型目錄時有時無（同一個模型大約一半的機率被判定「不存在」），
         # 這種失敗在驗證階段就發生、不耗額度，所以自動重試幾次
         for attempt in range(1, MODEL_RETRIES + 1):

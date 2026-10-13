@@ -730,6 +730,10 @@ async function runTurn(text, files, fork){
         let ev; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.event === "run") running = ev.run_id;
         if (ev.event === "init") st.set("模型思考中");
+        if (ev.event === "model_switched"){
+          toast(`「${ev.from}」已被 Google 下架，這次改用 ${modelLabel(ev.to)} 回答`);
+          if (currentModel() === ev.from && setModel(ev.to)) store.set("model", ev.to);
+        }
         if (ev.event === "retry") st.set(`agy 暫時找不到這個模型，自動重試中（第 ${ev.attempt}/${ev.max} 次）`);
         const su = ev.step_update;
         if (su){
@@ -879,18 +883,18 @@ function setModel(id){
 async function loadModels(refresh = true){
   const sel = $("#family");
   try {
-    const j = await (await fetch("/api/models" + (refresh ? "?refresh=1" : ""))).json();
+    const saved = store.get("model", "gemini-3.8-flash-high");
+    const j = await (await fetch(`/api/models?refresh=${refresh ? 1 : 0}&want=${encodeURIComponent(saved)}`)).json();
     $("#banner").hidden = !j.error; $("#banner").textContent = j.error ? "⚠ " + j.error : "";
     families = groupModels(j.models);
     sel.innerHTML = "";
     for (const f of families){ const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; sel.appendChild(o); }
     if (!families.length){ sel.innerHTML = `<option value="">（取不到模型清單，用預設）</option>`; return; }
-    const saved = store.get("model", "gemini-3.8-flash-high");
     if (!setModel(saved)){
-      if (!setModel("gemini-3.8-flash-high")) setModel(families[0].variants[0].id);
+      // 上次選的模型已經下架（例如 11/2 Claude 4.6 退役）：改用伺服器建議的同系列替代模型
+      if (!setModel(j.replace) && !setModel("gemini-3.8-flash-high")) setModel(families[0].variants[0].id);
       store.set("model", currentModel());
-      if (saved.startsWith("gemini-3.1-pro"))
-        toast("Gemini 3.1 Pro 已被 Google 從一般方案移除，已自動改用 " + modelLabel(currentModel()));
+      toast(`你上次用的「${saved}」已被 Google 下架，已自動改用 ${modelLabel(currentModel())}`);
     }
     if ($("#homeModel")) $("#homeModel").textContent = modelLabel(currentModel());
   } catch { sel.innerHTML = `<option value="">（伺服器未回應）</option>`; }
