@@ -184,7 +184,12 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 .tabs{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .tabs button{border:0;border-radius:0;padding:3px 14px}
 .tabs button.on{background:var(--accent);color:var(--accent-text)}
-#pfiles{max-height:220px}
+/* 專案設定：上半部固定高度，檔案清單吃掉剩下的空間並自己捲動，整個視窗不需要大捲軸 */
+#pdlg .dbody{display:flex;flex-direction:column}
+#pdlg .dbody>*{flex:none}
+#pdlg #pinstr{height:64px}
+#pdlg .mempv{max-height:96px}
+#pdlg #pfiles{flex:1 1 auto;min-height:110px;max-height:none}
 .mempv{border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:6px 12px;max-height:150px;overflow:auto;font-size:13px;cursor:zoom-in}
 .mempv:hover{border-color:var(--accent)}
 .mempv:empty::before{content:"還沒有記憶。點這裡可以自己寫下要它記住的事。";color:var(--muted)}
@@ -210,6 +215,7 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 #sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
 .slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
 .slider[hidden]{display:none}
+#box.has-sug #input::placeholder{color:color-mix(in srgb,var(--accent) 55%,var(--muted));font-style:italic}
 .bubble img.genimg{max-width:100%;border-radius:10px;border:1px solid var(--border);display:block;margin:8px 0;cursor:zoom-in}
 /* 設定：文字大小、對話寬度 */
 :root{--fs:15px;--chatw:860px}
@@ -423,6 +429,8 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>回答完成時播放提示音</b><span class="sp"></span><button id="testSound">試聽</button><label class="tg"><input type="checkbox" data-key="notify_sound"><i></i></label></div>
       <div class="srow"><b>回答完成時在分頁標題提醒</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="notify_title"><i></i></label></div>
       <p class="note">只在你切到其他視窗或分頁時提醒（例如等 Pro 長推導時去看講義）。</p>
+      <div class="srow"><b>預測我的下一句（Tab 採用）</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="suggest_reply"><i></i></label></div>
+      <p class="note">回答完會在空白的輸入框顯示灰色的建議，按 Tab 就填進去；直接打字就會忽略。用 Gemini Flash 預測，額度很少。</p>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
     </section>
@@ -678,6 +686,7 @@ async function send(){
 }
 // 送出一輪：一般送出、重新回答、編輯後送出都走這裡（fork = 從哪個對話的第幾則之前分支）
 async function runTurn(text, files, fork){
+  clearSuggestion();
   addUser(text, files);
   const a = addAssistant();
   const st = startStatus(a);
@@ -740,6 +749,7 @@ async function runTurn(text, files, fork){
   // 對話是消耗用量的主要來源：結束時馬上更新用量；Google 端統計有延遲，20 秒後再補抓一次
   refreshUsage(); setTimeout(() => { if (!running) refreshUsage(); }, 20000);
   notifyDone(!!reply);
+  if (reply) fetchSuggestion(text, reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
 }
@@ -796,6 +806,11 @@ document.addEventListener("drop", e => { if (!$("#pdlg").open && e.dataTransfer?
 function autoGrow(){ const t = $("#input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; }
 $("#input").addEventListener("input", autoGrow);
 $("#input").addEventListener("keydown", e => {
+  if (e.key === "Tab" && suggestion && !$("#input").value && !e.isComposing){   // 採用預測的回覆
+    e.preventDefault();
+    $("#input").value = suggestion; clearSuggestion(); autoGrow();
+    return;
+  }
   if (e.key !== "Enter" || e.isComposing) return;
   if (savedPrefs.send_key === "ctrl_enter"){           // Ctrl+Enter 送出，Enter 換行
     if (e.ctrlKey || e.metaKey){ e.preventDefault(); send(); }
@@ -1206,7 +1221,7 @@ async function openConv(id){
   if (running) return;
   const h = await (await fetch("/api/history/" + id)).json();
   if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
-  convId = id; $("#list").innerHTML = "";
+  convId = id; $("#list").innerHTML = ""; clearSuggestion();
   for (const m of h.messages){
     if (m.role === "user") addUser(m.text, m.files);
     else {
@@ -1280,7 +1295,7 @@ async function fillHome(){
 }
 function newConv(){
   if (running) return;
-  convId = null;
+  convId = null; clearSuggestion();
   // 設定裡的「新對話預設模型／聯網搜尋」
   if (savedPrefs.default_model && setModel(savedPrefs.default_model)) store.set("model", currentModel());
   if (savedPrefs.default_search !== undefined && !!savedPrefs.default_search !== searchOn) $("#searchBtn").click();
@@ -1400,8 +1415,26 @@ function applyPrefs(p){
   applyBackground(p);
   document.documentElement.style.setProperty("--fs", FONT[p.font_size] || FONT.normal);
   document.documentElement.style.setProperty("--chatw", WIDTH[p.chat_width] || WIDTH.normal);
-  $("#input").placeholder = p.send_key === "ctrl_enter" ? "問點什麼…（Ctrl+Enter 送出，Enter 換行）" : "問點什麼…（Enter 送出，Shift+Enter 換行）";
+  basePlaceholder = p.send_key === "ctrl_enter" ? "問點什麼…（Ctrl+Enter 送出，Enter 換行）" : "問點什麼…（Enter 送出，Shift+Enter 換行）";
+  if (!suggestion) $("#input").placeholder = basePlaceholder;
 }
+/* ---------- 預測回覆：回答完在空白輸入框顯示建議的下一句，按 Tab 採用 ---------- */
+let basePlaceholder = "問點什麼…（Enter 送出，Shift+Enter 換行）", suggestion = "", suggestToken = 0;
+function setSuggestion(t){
+  suggestion = t || "";
+  $("#input").placeholder = suggestion ? `${suggestion}　　⇥ Tab 採用` : basePlaceholder;
+  $("#box").classList.toggle("has-sug", !!suggestion);
+}
+async function fetchSuggestion(q, a){
+  if (savedPrefs.suggest_reply === false || !a) return;
+  const token = ++suggestToken, conv = convId;
+  try {
+    const r = await post("/api/suggest", {q, a});
+    // 期間使用者已經開始打字、送出或換了對話：就不顯示
+    if (r.ok && r.text && token === suggestToken && conv === convId && !running && !$("#input").value) setSuggestion(r.text);
+  } catch {}
+}
+function clearSuggestion(){ suggestToken++; setSuggestion(""); }
 // 一般的設定控制項：checkbox／select／textarea 用 data-key，分段按鈕用 .seg[data-key] > button[data-v]
 function paintControls(){
   document.querySelectorAll("#sdlg [data-key]").forEach(el => {

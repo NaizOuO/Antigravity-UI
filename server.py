@@ -71,6 +71,7 @@ DEFAULT_SETTINGS = {
     "notify_sound": True,         # 回答完成時（視窗不在前面）播放提示音
     "notify_title": True,         # 回答完成時分頁標題提醒
     "latex_copy": True,           # 點公式複製 LaTeX 原始碼
+    "suggest_reply": True,        # 回答完預測使用者的下一句，輸入框按 Tab 採用（用 Gemini Flash）
     # 用量
     "quota_warn": 15,             # 目前模型的額度剩下低於幾 % 時提醒（0 = 不提醒）
     # 更新
@@ -818,6 +819,22 @@ def auto_title(cid, question, answer):
 
 FAILED_REPLY = "（已中止或無回覆）"
 
+# ---------- 預測使用者的下一句（輸入框按 Tab 採用） ----------
+SUGGEST_PROMPT = """下面是使用者和 AI 的最後一輪對話。請預測「使用者」接下來最可能輸入的一句話。
+規則：繁體中文、用使用者的口吻、25 字以內、具體（例如追問某個步驟、要求舉例、請它輸出成檔案），
+不要加引號、編號、表情符號或任何說明，也不要使用任何工具。只輸出那一句話。
+
+使用者：{q}
+
+AI：{a}
+"""
+
+
+def suggest_next(question, answer):
+    t = run_agy_text(SUGGEST_PROMPT.format(q=question[:1500], a=answer[-3000:]), "suggest")
+    t = t.strip().splitlines()[0].strip(" \"'「」『』*#-") if t.strip() else ""
+    return t[:60]
+
 
 def retitle_legacy(limit=30):
     """舊版建立的對話標題就是第一則訊息原文：啟動時在背景逐一補上標題（一次最多 limit 個）。
@@ -1034,6 +1051,12 @@ class Handler(BaseHTTPRequestHandler):
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_front(folder)
             return self.send_json({"ok": True, "path": str(folder)})
+        if u.path == "/api/suggest":
+            d = self.body()
+            try:
+                return self.send_json({"ok": True, "text": suggest_next(d.get("q") or "", d.get("a") or "")})
+            except RuntimeError as e:
+                return self.send_json({"ok": False, "message": str(e)})
         if u.path == "/api/agy_storage/clean":
             removed = clean_agy_storage()
             return self.send_json({"ok": True, "removed": removed, **agy_storage()})
