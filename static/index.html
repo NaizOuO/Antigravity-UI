@@ -723,7 +723,9 @@ async function runTurn(text, files, fork){
   else if (!a.bubble.innerHTML) a.bubble.innerHTML = `<div class="err">（已中止或沒有回覆）</div>`;
   a.bubble.classList.remove("typing");
   st.end();
-  setRunning(false); scrollDown(); loadHistory(); refreshUsage();
+  setRunning(false); scrollDown(); loadHistory();
+  // 對話是消耗用量的主要來源：結束時馬上更新用量；Google 端統計有延遲，20 秒後再補抓一次
+  refreshUsage(); setTimeout(() => { if (!running) refreshUsage(); }, 20000);
   notifyDone(!!reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
