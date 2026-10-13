@@ -16,7 +16,7 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import updater
 import version
@@ -53,9 +53,10 @@ DEFAULT_SETTINGS = {
     "instructions": "請用繁體中文回答。數學式請用 LaTeX（行內 $...$，獨立式 $$...$$）。",
     "shortcut_prompt": True,      # 第一次開啟時詢問要不要建立桌面捷徑；回答過就不再問
     # 背景（設計參考 Naiz Studio）：圖片放在 setting/images
-    "bg_image": "",               # 空字串 = 不使用背景
+    "bg_random": True,            # 每次開啟隨機挑一張（內建背景＋使用者的圖）；關掉就固定用 bg_image
+    "bg_image": "",               # 空字串 = 不使用背景；「builtin:名稱」= 內建背景（依深淺色自動選版本）
     "bg_mode": "cover",           # cover 覆蓋／contain 完整／stretch 延展／center 置中／tile 並排／manual 自由
-    "bg_alpha": 35,               # 透明度 0～100（越大越明顯）
+    "bg_alpha": 90,               # 透明度 0～100（越大越明顯）；內建背景本身就很淡，所以預設接近不透明
     "bg_blur": 0,                 # 模糊 0～20 px（Gemini 建議：背景花俏時模糊一點比較好讀）
     "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
     "bg_scale": 100,              # 自由模式的縮放（%）
@@ -75,6 +76,113 @@ DEFAULT_SETTINGS = {
     # 更新
     "update_check": True,         # 開啟時檢查新版本
 }
+# ---------- agy 的暫存（~/.gemini/antigravity-cli/brain/<對話 id>/） ----------
+# agy 每段對話都會在 brain 裡留一個資料夾（對話紀錄、讀過的 PDF 副本、生成的圖片），不會自己清。
+# 這個介面只清「自己建立的」資料夾：使用者在終端機用 agy 的對話也在同一個地方，絕不動。
+AGY_BRAIN = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+AGY_RUNS = DATA / "agy_runs.json"          # 這個介面建立過的 agy 對話 id
+AGY_RUNS_LOCK = threading.Lock()
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+OUR_MARKERS = ("[使用者的常駐指示]", "記憶整理員", "請幫下面這段對話取一個簡短的標題", "[輸出檔案]", "[專案資料]")
+
+
+def _load_runs():
+    try:
+        return set(json.loads(AGY_RUNS.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
+
+
+def remember_run(cid):
+    if not cid:
+        return
+    with AGY_RUNS_LOCK:
+        runs = _load_runs()
+        if cid not in runs:
+            runs.add(cid)
+            AGY_RUNS.write_text(json.dumps(sorted(runs)), encoding="utf-8")
+
+
+def brain_dir(cid):
+    p = AGY_BRAIN / re.sub(r"[^0-9a-zA-Z-]", "", cid or "")
+    return p if cid and p != AGY_BRAIN else None
+
+
+def drop_brain(cid):
+    """刪掉這個介面建立的某段對話在 brain 裡的資料夾（不是自己建立的不動）。"""
+    p = brain_dir(cid)
+    if p and p.is_dir() and (cid in _load_runs() or _looks_ours(p)):
+        import shutil
+        shutil.rmtree(p, ignore_errors=True)
+
+
+def _looks_ours(folder):
+    """舊版沒有記錄 id：看對話紀錄的開頭有沒有這個介面才會送出的固定字樣。"""
+    t = folder / ".system_generated" / "logs" / "transcript.jsonl"
+    try:
+        with open(t, encoding="utf-8", errors="replace") as f:
+            head = f.read(6000)
+    except OSError:
+        return False
+    return any(m in head for m in OUR_MARKERS)
+
+
+def collect_images(cid, since):
+    """這輪回答中 Nano Banana（agy 的生圖子代理）生成的圖片：搬到 output，回傳新路徑。
+    agy 會把圖存在 brain/<對話>/ 下（使用者上傳與暫存的 .user_uploaded、.tempmediaStorage 不算）。"""
+    p = brain_dir(cid)
+    if not p or not p.is_dir():
+        return []
+    moved = []
+    for f in p.rglob("*"):
+        rel = f.relative_to(p).parts
+        if (f.is_file() and f.suffix.lower() in IMAGE_EXTS and f.stat().st_mtime >= since - 2
+                and not any(part.startswith(".") for part in rel)):
+            dest, n = OUTPUT / f.name, 2
+            while dest.exists():
+                dest = OUTPUT / f"{f.stem} ({n}){f.suffix}"
+                n += 1
+            try:
+                import shutil
+                shutil.move(str(f), str(dest))
+                moved.append(dest)
+            except OSError:
+                pass
+    return moved
+
+
+def agy_storage():
+    """brain 資料夾的統計：這個介面的（還在用／可清理）與其他（終端機的，不動）。"""
+    if not AGY_BRAIN.is_dir():
+        return {"exists": False}
+    live = {p.stem for p in HISTORY.glob("*.json")}
+    runs = _load_runs()
+    stat = {"in_use": [0, 0], "cleanable": [0, 0], "others": [0, 0]}
+    for d in AGY_BRAIN.iterdir():
+        if not d.is_dir():
+            continue
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        ours = d.name in runs or _looks_ours(d)
+        key = "others" if not ours else ("in_use" if d.name in live else "cleanable")
+        stat[key][0] += 1
+        stat[key][1] += size
+    return {"exists": True, "path": str(AGY_BRAIN),
+            **{k: {"count": c, "size": human_size(s)} for k, (c, s) in stat.items()}}
+
+
+def clean_agy_storage():
+    """清掉「這個介面建立、但對話已經不在」的 brain 資料夾（包含記憶整理、取標題用的暫時對話）。"""
+    import shutil
+    live = {p.stem for p in HISTORY.glob("*.json")}
+    runs = _load_runs()
+    removed = 0
+    for d in AGY_BRAIN.iterdir() if AGY_BRAIN.is_dir() else []:
+        if d.is_dir() and d.name not in live and (d.name in runs or _looks_ours(d)):
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+    return removed
+
+
 # ---------- 匯出、備份、匯入 ----------
 def export_markdown(h):
     """把一段對話存成 Markdown 到 output 資料夾，回傳檔案路徑。"""
@@ -201,9 +309,14 @@ def open_folder_front(folder):
     threading.Thread(target=bring_front, daemon=True).start()
 
 
-FOLDERS = {"output": OUTPUT,"images": BG_DIR, "setting": SETTING_DIR, "data": DATA}
+# 內建背景（tools/make_backgrounds.py 產生）：每張都有深色、淺色版本
+BUILTIN_BG = [{"id": "wave", "name": "波的干涉"}, {"id": "contour", "name": "等高線"},
+              {"id": "bloch", "name": "布洛赫球"}, {"id": "dusk", "name": "暮色"},
+              {"id": "field", "name": "電偶極場線"}]
+FOLDERS = {"output": OUTPUT, "images": BG_DIR, "setting": SETTING_DIR, "data": DATA, "agy": AGY_BRAIN}
 OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md、txt、csv、程式碼），請用 write_to_file 存到 {dir}\\ 資料夾，"
-               "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。")
+               "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。"
+               "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
 
 # ---------- 桌面捷徑 ----------
 SHORTCUT_NAME = "Antigravity UI.lnk"
@@ -517,6 +630,8 @@ def run_agy_text(prompt, name):
         r = json.loads(out)
     except Exception as e:
         raise RuntimeError(f"呼叫 agy 失敗：{e}")
+    # 記憶整理、取標題這種一次性的呼叫：agy 留下的對話資料夾用不到，直接清掉
+    remember_run(r.get("conversation_id")); drop_brain(r.get("conversation_id"))
     text = (r.get("response") or "").strip()
     if r.get("status") != "SUCCESS" or not text:
         raise RuntimeError("模型沒有回傳內容")
@@ -786,12 +901,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(STATIC / name, "image/png" if name.endswith(".png") else "image/x-icon")
         if u.path == "/api/backgrounds":
             names = sorted(p.name for p in BG_DIR.iterdir() if p.is_file() and p.suffix.lower() in BG_EXTS)
-            return self.send_json({"images": names, "folder": str(BG_DIR)})
+            return self.send_json({"images": names, "folder": str(BG_DIR), "builtin": BUILTIN_BG})
+        if u.path.startswith("/bgb/"):              # 內建背景：static/backgrounds/<名稱>-dark|light.jpg
+            p = STATIC / "backgrounds" / unquote(u.path[5:])
+            if p.is_file() and inside(p, STATIC / "backgrounds"):
+                return self.send_file(p)
+            return self.send_json({"error": "not found"}, 404)
         if u.path.startswith("/bg/"):
             p = BG_DIR / unquote(u.path[4:])
             if p.is_file() and inside(p, BG_DIR) and p.suffix.lower() in BG_EXTS:
                 return self.send_file(p)
             return self.send_json({"error": "not found"}, 404)
+        if u.path == "/api/agy_storage":
+            return self.send_json(agy_storage())
         if u.path == "/api/folders":
             return self.send_json({k: str(v) for k, v in FOLDERS.items()})
         if u.path == "/api/shortcut":
@@ -884,6 +1006,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/delete":
             cid = self.body().get("id", "")
             remove_transcript(load_hist(cid))
+            drop_brain(cid)                           # agy 為這段對話留的暫存（讀過的 PDF 副本等）一起清掉
             p = hist_path(cid)
             if p.exists():
                 p.unlink()
@@ -911,6 +1034,9 @@ class Handler(BaseHTTPRequestHandler):
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_front(folder)
             return self.send_json({"ok": True, "path": str(folder)})
+        if u.path == "/api/agy_storage/clean":
+            removed = clean_agy_storage()
+            return self.send_json({"ok": True, "removed": removed, **agy_storage()})
         if u.path == "/api/export":                # 目前對話存成 Markdown 到 output
             h = load_hist(self.body().get("id", ""))
             if not h:
@@ -1062,6 +1188,7 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--conversation", cid]
 
         run_id = uuid.uuid4().hex
+        started = time.time()                       # 用來找出這輪 Nano Banana 新生成的圖片
         cwd = proj_dir(pr["id"]) if pr else WORK   # 專案對話在專案資料夾裡跑，模型也能自己列出/搜尋檔案
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -1123,6 +1250,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             if ev.get("event") == "init":
                 new_cid = ev.get("conversation_id") or new_cid
+                remember_run(new_cid)
             su = ev.get("step_update") or {}
             if su.get("step_type") == "agent_response" and su.get("text_delta"):
                 reply += su["text_delta"]
@@ -1141,11 +1269,25 @@ class Handler(BaseHTTPRequestHandler):
             RUNS.pop(run_id, None)
         STOPPED.discard(run_id)
 
+        # Nano Banana 生成的圖片：從 agy 的暫存搬到 output，直接接在回答後面顯示
+        images = collect_images(new_cid, started) if new_cid else []
+        if images:
+            # 路徑要編碼：「AI sandbox」這種有空格的路徑會讓 Markdown 的圖片語法斷掉
+            shown = "\n\n".join(f"![{p.stem}](file:///{quote(p.as_posix(), safe=':/')})" for p in images)
+            names = "、".join(p.name for p in images)
+            for p in images:      # 模型自己寫的圖片連結指向 agy 暫存（已經搬走）：拿掉，改用下面正確的
+                reply = re.sub(r"!\[[^\]]*\]\([^)]*" + re.escape(p.stem) + r"[^)]*\)\n?", "", reply)
+            reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到 output：{names}"
+            emit({"event": "images", "paths": [str(p) for p in images], "reply": reply})
         if new_cid and (reply or steps or old):
             user_msg = {"role": "user", "text": text, "files": files}
             reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps}
+            if images:
+                reply_msg["images"] = [str(p) for p in images]
             if old:
                 save_fork(old, prior, new_cid, model, user_msg, reply_msg)
+                if old["id"] != new_cid:
+                    drop_brain(old["id"])          # 被取代的分支：agy 的暫存也清掉
             else:
                 save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None)
             # 新對話，或重問／編輯第一則（使用者沒自己取過名稱時）：背景用 Flash 取標題

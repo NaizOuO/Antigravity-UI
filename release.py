@@ -19,7 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 PROGRAM_FILES = ["server.py", "version.py", "updater.py", "static/index.html", "static/icon.png", "static/icon.ico",
-                 "啟動.vbs", "關閉.bat", "打包分享.bat", "README.md"]
+                 "啟動.vbs", "關閉.bat", "打包分享.bat", "README.md"] + [
+                 f"static/backgrounds/{n}-{t}.jpg" for n in ("wave", "contour", "bloch", "dusk", "field")
+                 for t in ("dark", "light")]
 
 
 def sha256(path):

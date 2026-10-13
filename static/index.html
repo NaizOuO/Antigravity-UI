@@ -171,8 +171,11 @@ dialog .r{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 dialog button{border:1px solid var(--border);background:none;border-radius:6px;padding:5px 14px}
 dialog .primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 /* 長內容的對話框：標題與按鈕固定，中間捲動（不會超出畫面） */
-dialog.tall[open]{display:flex;flex-direction:column;max-height:88vh}
-dialog.tall .dbody,dialog.big .dbody{overflow:auto;flex:1;min-height:0;padding-right:4px}
+dialog.tall[open]{display:flex;flex-direction:column;max-height:88vh;overflow:hidden}
+/* 只有中間捲動；position:relative 讓 KaTeX 隱藏的絕對定位層留在捲動區裡，不會把整個視窗撐大 */
+dialog.tall .dbody,dialog.big .dbody{overflow:auto;flex:1 1 auto;min-height:0;padding-right:4px;position:relative}
+dialog.tall>h3,dialog.tall>.dhead,dialog.tall>.snav,dialog.tall>.r{flex:none}
+.mempv,#memView,.bubble{position:relative}
 dialog.wide{width:min(680px,94vw)}
 dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height:86vh}
 .dhead{display:flex;align-items:center;gap:12px;margin-bottom:8px}
@@ -207,6 +210,7 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 #sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
 .slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
 .slider[hidden]{display:none}
+.bubble img.genimg{max-width:100%;border-radius:10px;border:1px solid var(--border);display:block;margin:8px 0;cursor:zoom-in}
 /* 設定：文字大小、對話寬度 */
 :root{--fs:15px;--chatw:860px}
 .wrap{max-width:var(--chatw)}
@@ -397,7 +401,8 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">讀長篇推導用「窄」或「標準」比較不累；貼表格或程式碼可以用「寬」。</p>
       <div class="srow"><b>背景圖片</b><span class="meta" id="bgCount"></span>
         <span class="sp"></span><button id="bgAdd">＋ 加入圖片</button><button id="bgFolder">開啟圖片資料夾</button></div>
-      <p class="note">把圖片放進圖片資料夾（setting\images），或按「加入圖片」，就能在下面選擇使用。</p>
+      <p class="note">內建 5 張背景（會依深淺色自動換版本）；也可以把自己的圖片放進圖片資料夾（setting\images）或按「加入圖片」。</p>
+      <div class="srow"><b>隨機輪播</b><span class="meta">每次開啟介面隨機換一張</span><span class="sp"></span><label class="tg"><input type="checkbox" data-key="bg_random"><i></i></label></div>
       <div id="bgList"></div>
       <input type="file" id="bgFile" accept="image/*" multiple hidden>
       <div class="srow"><b>填充方式</b></div>
@@ -435,6 +440,9 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">把對話、專案（含上傳的檔案與記憶）和設定打包成一個 zip，存到 output 資料夾。換電腦時很方便。</p>
       <div class="srow"><b>匯入備份</b><span class="sp"></span><button id="importBtn">選擇備份檔</button><input type="file" id="importFile" accept=".zip" hidden></div>
       <p class="note">只會補上目前沒有的對話、專案和設定，已經存在的不會被覆蓋。</p>
+      <div class="srow"><b>agy 暫存</b><span class="sp"></span><button data-folder="agy">開啟</button><button id="agyClean">清理</button></div>
+      <p class="note" id="agyStat">計算中…</p>
+      <p class="note">agy 會為每段對話留一份暫存（讀過的 PDF 副本、生成的圖片等）。「清理」只會刪掉這個介面建立、而且對話已經不在的部分；你在終端機用 agy 的對話不會被動到。</p>
       <div class="srow"><b>資料夾</b><span class="sp"></span><button data-folder="output">輸出</button><button data-folder="setting">設定</button><button data-folder="data">資料</button></div>
       <p class="note">output、setting、data 都是你的個人資料，更新時不會被動到。</p>
     </section>
@@ -489,6 +497,9 @@ function renderMd(src){
            .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => keep(t, false))
            .replace(/(^|[^\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g, (_, pre, t) => pre + keep(t, false));
   src = src.replace(/@@CODE(\d+)@@/g, (_, i) => codes[i]);
+  // 本機圖片（例如 Nano Banana 生成、存到 output 的圖）：在清理 HTML 前先換成伺服器網址（file: 會被 DOMPurify 拿掉）
+  src = src.replace(/!\[([^\]]*)\]\(file:\/\/\/([^)\s]+)\)/g, (_, alt, p) =>
+    `![${alt}](/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g, "\\"))})`);
   let html = DOMPurify.sanitize(marked.parse(src, {gfm:true, breaks:false}));
   html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
     const m = maths[i];
@@ -499,6 +510,7 @@ function renderMd(src){
   });
   // agy 回覆裡的 file:/// 連結改成走本機伺服器
   html = html.replace(/href="file:\/\/\/([^"]+)"/g, (_, p) => `href="/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g,'\\'))}" target="_blank"`);
+  html = html.replace(/<img ([^>]*?)src="\/api\/file\?p=/g, '<img class="genimg" $1src="/api/file?p=');
   return html;
 }
 
@@ -709,6 +721,7 @@ async function runTurn(text, files, fork){
           a.meta.textContent = `${modelLabel(currentModel())} ·${(r.duration_seconds||0).toFixed(1)} 秒 · ${u.total_tokens ?? "?"} tokens`;
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
+        if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
@@ -1300,7 +1313,17 @@ $("#sideResize").addEventListener("pointerdown", e => {
 $("#sideResize").ondblclick = () => { setSideWidth(SIDE_DEFAULT); store.set("sideWidth", SIDE_DEFAULT); };
 
 /* ---------- 資料夾 ---------- */
-const FOLDER_NAMES = {output:"輸出（output）", images:"背景圖片（setting\\images）", setting:"設定（setting）", data:"資料（data）"};
+const FOLDER_NAMES = {output:"輸出（output）", images:"背景圖片（setting\\images）", setting:"設定（setting）", data:"資料（data）", agy:"agy 暫存"};
+function paintAgyStat(s){
+  $("#agyStat").textContent = !s.exists ? "找不到 agy 的暫存資料夾" :
+    `這個介面：使用中 ${s.in_use.count} 段（${s.in_use.size}）、可清理 ${s.cleanable.count} 段（${s.cleanable.size}）；其他（終端機等）${s.others.count} 段（${s.others.size}），不會動到`;
+}
+async function loadAgyStat(){ try { paintAgyStat(await (await fetch("/api/agy_storage")).json()); } catch {} }
+$("#agyClean").onclick = async () => {
+  if (!confirm("清理這個介面建立、但對話已經不在的 agy 暫存？\n（使用中的對話與你在終端機的 agy 對話都不會動到）")) return;
+  const r = await post("/api/agy_storage/clean", {}); paintAgyStat(r);
+  toast(`🧹 已清理 ${r.removed} 段 agy 暫存`);
+};
 function toast(msg){
   let t = $("#toast");
   if (!t){ t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t); }
@@ -1322,11 +1345,26 @@ const BG_NOTES = {
 };
 const BG_KEYS = ["bg_image", "bg_mode", "bg_alpha", "bg_blur", "bg_x", "bg_y", "bg_scale"];
 let savedPrefs = {}, prefs = {}, bgNatural = {w:0, h:0};
+// 背景圖的網址：內建背景依深淺色選版本，使用者的圖直接用
+let bgPool = {builtin:[], images:[]}, sessionPick = null;
+const darkMode = () => matchMedia("(prefers-color-scheme: dark)").matches;
+const bgUrl = id => id.startsWith("builtin:") ? `/bgb/${id.slice(8)}-${darkMode() ? "dark" : "light"}.jpg` : "/bg/" + encodeURIComponent(id);
+function currentBg(p){
+  if (!p.bg_random) return p.bg_image || "";
+  const pool = [...bgPool.builtin.map(b => "builtin:" + b.id), ...bgPool.images];
+  if (!pool.length) return "";
+  try { sessionPick = sessionPick || sessionStorage.getItem("bgPick"); } catch {}
+  if (!sessionPick || !pool.includes(sessionPick)){          // 這次開啟隨機挑一張（重新整理頁面前不變）
+    sessionPick = pool[Math.floor(Math.random() * pool.length)];
+    try { sessionStorage.setItem("bgPick", sessionPick); } catch {}
+  }
+  return sessionPick;
+}
 function applyBackground(p){
-  const layer = $("#bgLayer"), on = !!p.bg_image;
+  const layer = $("#bgLayer"), id = currentBg(p), on = !!id;
   document.body.classList.toggle("has-bg", on);
   if (!on){ layer.style.opacity = 0; layer.style.backgroundImage = "none"; return; }
-  const url = "/bg/" + encodeURIComponent(p.bg_image);
+  const url = bgUrl(id);
   layer.style.backgroundImage = `url("${url}")`;
   layer.style.opacity = (p.bg_alpha ?? 35) / 100;
   const blur = +(p.bg_blur || 0);
@@ -1350,8 +1388,11 @@ function applyBackground(p){
 async function loadPrefs(){
   try { savedPrefs = await (await fetch("/api/settings")).json(); } catch { savedPrefs = {}; }
   prefs = {...savedPrefs};
+  if (!bgPool.builtin.length) await loadBgPool();
   applyPrefs(prefs);
 }
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyBackground(prefs));   // 深淺色切換：內建背景換版本
+document.querySelector('[data-key="bg_random"]').addEventListener("change", () => paintBgList());
 // 外觀類設定即時套用（預覽）；其他設定在用到的地方讀 savedPrefs
 const FONT = {small:"14px", normal:"15px", large:"17px"};
 const WIDTH = {narrow:"720px", normal:"860px", wide:"1120px", full:"none"};
@@ -1403,22 +1444,29 @@ function paintPrefs(){
   const dirty = Object.keys(prefs).some(k => (prefs[k] ?? "") !== (savedPrefs[k] ?? ""));
   $("#sStatus").textContent = dirty ? "● 有尚未儲存的變更（外觀是預覽）" : "";
 }
+async function loadBgPool(){
+  try { const j = await (await fetch("/api/backgrounds")).json(); bgPool = {builtin:j.builtin || [], images:j.images || []}; } catch {}
+}
 async function paintBgList(){
-  const j = await (await fetch("/api/backgrounds")).json();
-  $("#bgCount").textContent = `${j.images.length} 張`;
+  await loadBgPool();
+  $("#bgCount").textContent = `內建 ${bgPool.builtin.length} 張＋自己的 ${bgPool.images.length} 張`;
   const list = $("#bgList"); list.innerHTML = "";
-  for (const name of ["", ...j.images]){
-    const row = document.createElement("div"); row.className = "bgi" + ((prefs.bg_image || "") === name ? " on" : "");
+  const rows = [["", "不使用背景"], ...bgPool.builtin.map(b => ["builtin:" + b.id, "內建：" + b.name]), ...bgPool.images.map(n => [n, n])];
+  const showing = currentBg(prefs);
+  for (const [id, label] of rows){
+    const chosen = prefs.bg_random ? id === showing && !!id : (prefs.bg_image || "") === id;
+    const row = document.createElement("div"); row.className = "bgi" + (chosen ? " on" : "");
     row.innerHTML = `<span class="th"></span><span></span>`;
-    row.querySelector("span:last-child").textContent = name || "不使用背景";
-    if (name) row.querySelector(".th").style.backgroundImage = `url("/bg/${encodeURIComponent(name)}")`;
-    row.onclick = () => { prefs.bg_image = name; applyBackground(prefs); paintBgList(); paintPrefs(); };
+    row.querySelector("span:last-child").textContent = label + (prefs.bg_random && chosen ? "（這次隨機到的）" : "");
+    if (id) row.querySelector(".th").style.backgroundImage = `url("${bgUrl(id)}")`;
+    // 點選一張：關掉隨機、固定用這張
+    row.onclick = () => { prefs.bg_image = id; prefs.bg_random = false; applyBackground(prefs); paintBgList(); paintPrefs(); };
     list.appendChild(row);
   }
 }
 async function openPrefs(section){
   await loadPrefs(); fillDefaultModel(); paintPrefs(); await paintBgList();
-  checkUpdate(false);
+  checkUpdate(false); loadAgyStat();
   $("#sdlg").showModal();
   if (section) [...document.querySelectorAll("#sbody section")].find(s => s.dataset.title === section)?.scrollIntoView();
 }
