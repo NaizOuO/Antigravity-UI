@@ -33,6 +33,9 @@ description: >-
 
 ## Typst 語法提醒（最常寫錯的地方）
 - 數學：`$x^2$` 行內；`$ x^2 $`（前後有空格）獨立一行。分數 `a/b` 或 `frac(a, b)`，希臘字母直接寫 `alpha`、`hbar`、`omega_r`。
+- 微分（最常寫錯）：Typst **沒有** `diff`、`d/dt` 這種寫法。請用 physica 的 `dv(f, t)`（全微分）、`dv(f, x, 2)`（二階）、
+  `pdv(psi(x, t), t)`（偏微分）、`pdv(psi, x, 2)`；或內建的 `partial`（∂）、`dif x`（積分裡的 dx：`integral_0^1 f(x) dif x`）。
+  例：薛丁格方程式 `$ i hbar pdv(psi(x, t), t) = - hbar^2/(2m) pdv(psi(x, t), x, 2) + V(x) psi(x, t) $`
 - Dirac 符號用 physica：`#import "@preview/physica:VERSION": *` 後寫 `$ket(psi)$`、`$bra(phi)$`、`$braket(phi, psi)$`。
 - 多個字母的變數要加引號或空格：`$E_"C"$`、`$E_C$`（單字母可以）。
 - 中文直接寫，不需要特別處理；不要用 LaTeX 指令（`\frac`、`\section`）。

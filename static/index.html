@@ -704,7 +704,7 @@ async function send(){
   runTurn(text, files, null);
 }
 // 送出一輪：一般送出、重新回答、編輯後送出都走這裡（fork = 從哪個對話的第幾則之前分支）
-async function runTurn(text, files, fork, fixDepth = 0){
+async function runTurn(text, files, fork){
   let pdfFailures = [], needComp = null;
   clearSuggestion();
   addUser(text, files);
@@ -751,7 +751,8 @@ async function runTurn(text, files, fork, fixDepth = 0){
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
-        if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); }
+        if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component") needComp = ev;
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
@@ -772,14 +773,7 @@ async function runTurn(text, files, fork, fixDepth = 0){
   refreshUsage(); setTimeout(() => { if (!running) refreshUsage(); }, 20000);
   notifyDone(!!reply);
   if (needComp) showComponentCard(a, needComp);
-  // PDF 編譯失敗：把錯誤交回給 AI 自動修正（最多 2 次）
-  if (pdfFailures.length && fixDepth < 2 && convId){
-    const f = pdfFailures[0];
-    toast(`⚙ ${f.name} 編譯有錯，自動請 AI 修正（第 ${fixDepth + 1} 次）`);
-    return runTurn(`⚙ 自動修正：Typst 編譯「${f.name}」時發生錯誤，請依錯誤訊息修正同一個檔案（不要執行指令）：\n\`\`\`\n${f.error}\n\`\`\``,
-                   [], null, fixDepth + 1);
-  }
-  if (pdfFailures.length) a.meta.textContent = `⚠ ${pdfFailures.map(f => f.name).join("、")} 自動修正 2 次仍無法編譯，.typ 檔在 output 資料夾`;
+  // PDF 編譯失敗的自動修正在伺服器背景進行（不會變成一則訊息），結果已經寫在回答最後
   if (reply && !needComp) fetchSuggestion(text, reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));

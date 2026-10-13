@@ -228,6 +228,35 @@ def compile_files(paths):
     return results
 
 
+FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 你剛才寫的 {name} 用 Typst 編譯時發生錯誤。
+請直接修正同一個檔案（用 replace_file_content 或 write_to_file），不要執行任何指令。
+修正完只要回一句「已修正」，不需要其他說明。
+
+錯誤訊息：
+{error}
+"""
+
+
+def fix_typst(cid, cwd, model, result):
+    """在背景請模型依錯誤修正 .typ（同一段 agy 對話，但不出現在介面的對話裡）。"""
+    cmd = [agy_exe(), "-p", FIX_PROMPT.format(name=result["name"], error=result["error"][-2500:]),
+           "--output-format", "json", "--conversation", cid,
+           "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
+    if model:
+        cmd += ["--model", model]
+    try:
+        subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=NO_WINDOW, timeout=600)
+    except Exception:
+        pass
+
+
+def error_summary(error):
+    """錯誤訊息的第一行，給使用者看「剛剛為什麼重新產生」。"""
+    first = next((l.strip() for l in error.splitlines() if l.strip().startswith("error")), error.strip().splitlines()[0] if error.strip() else "")
+    return first.replace("error:", "").strip()[:120]
+
+
 def pdf_links(results):
     ok = [r for r in results if r["ok"]]
     return "\n".join(f"📄 已產生 PDF：[{r['pdf_name']}](file:///{quote(Path(r['pdf']).as_posix(), safe=':/')})" for r in ok)
@@ -1415,8 +1444,29 @@ class Handler(BaseHTTPRequestHandler):
         typs = new_typ_files(started) if returncode == 0 else []
         if typs and components.installed("typst"):
             results = compile_files(typs)
-            if any(r["ok"] for r in results):
-                reply = reply.rstrip() + "\n\n" + pdf_links(results)
+            fixed_notes = []
+            # 編譯失敗：在背景請模型修正再重新編譯（最多 2 次），修正過程不顯示在對話裡
+            for attempt in (1, 2):
+                failed = [r for r in results if not r["ok"]]
+                if not failed or not new_cid:
+                    break
+                for r in failed:
+                    emit({"event": "pdf_fixing", "attempt": attempt, "name": r["name"]})
+                    reason = error_summary(r["error"])
+                    fix_typst(new_cid, cwd, model, r)
+                    again = compile_files([r["typ"]])[0]
+                    results[results.index(r)] = again
+                    if again["ok"]:
+                        fixed_notes.append(f"{r['name']} 第一次排版時有語法錯誤（{reason}），已自動修正後重新產生。")
+            links = pdf_links(results)
+            if links:
+                reply = reply.rstrip() + "\n\n" + links
+            if fixed_notes:
+                reply += "\n\n" + "\n".join(f"> ⚙ {n}" for n in fixed_notes)
+            still = [r for r in results if not r["ok"]]
+            if still:
+                reply += "\n\n" + "\n".join(f"> ⚠ {r['name']} 自動修正 2 次仍無法排版（{error_summary(r['error'])}），"
+                                            f".typ 原始檔在 output 資料夾，可以請我再修正一次。" for r in still)
             emit({"event": "pdf", "results": results, "reply": reply})
         elif typs:
             emit({"event": "need_component", "id": "typst", "info": components.status()["typst"],
