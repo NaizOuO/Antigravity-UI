@@ -438,7 +438,8 @@ SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並
 
 def load_settings():
     try:
-        return {**DEFAULT_SETTINGS, **json.loads(SETTINGS.read_text(encoding="utf-8"))}
+        # utf-8-sig：使用者用記事本編輯過的檔案開頭可能有 BOM
+        return {**DEFAULT_SETTINGS, **json.loads(SETTINGS.read_text(encoding="utf-8-sig"))}
     except (OSError, ValueError):
         return dict(DEFAULT_SETTINGS)
 
