@@ -207,6 +207,8 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 #sdlg .seg button.on{background:var(--accent);color:var(--accent-text)}
 .slider{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;margin:6px 0;font-size:13.5px}
 .slider[hidden]{display:none}
+#toast{position:fixed;left:50%;bottom:110px;transform:translate(-50%,12px);z-index:50;background:var(--panel);color:var(--text);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:9px 16px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.2s}
+#toast.show{opacity:1;transform:translate(-50%,0)}
 .slider input{width:100%;accent-color:var(--accent)}
 .slider output{text-align:right;font-variant-numeric:tabular-nums;color:var(--accent)}
 /* 背景圖片：照 Naiz Studio 的六種填充方式；內容維持可讀（半透明底色＋毛玻璃，公式與程式碼不透明） */
@@ -1207,7 +1209,17 @@ $("#sideResize").addEventListener("pointerdown", e => {
 $("#sideResize").ondblclick = () => { setSideWidth(SIDE_DEFAULT); store.set("sideWidth", SIDE_DEFAULT); };
 
 /* ---------- 資料夾 ---------- */
-const openFolder = which => post("/api/open_folder", {which});
+const FOLDER_NAMES = {output:"輸出（output）", images:"背景圖片（setting\\images）", setting:"設定（setting）", data:"資料（data）"};
+function toast(msg){
+  let t = $("#toast");
+  if (!t){ t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
+}
+async function openFolder(which){
+  const r = await post("/api/open_folder", {which});
+  toast(r.ok ? `📂 已開啟${FOLDER_NAMES[which] || ""}資料夾（沒看到的話請看工作列）` : r.message);
+}
 $("#outputBtn").onclick = () => openFolder("output");
 document.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => openFolder(b.dataset.folder));
 

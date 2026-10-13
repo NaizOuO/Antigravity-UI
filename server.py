@@ -60,7 +60,78 @@ DEFAULT_SETTINGS = {
     "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
     "bg_scale": 100,              # 自由模式的縮放（%）
 }
-FOLDERS = {"output": OUTPUT, "images": BG_DIR, "setting": SETTING_DIR, "data": DATA}
+def _explorer_windows():
+    """目前所有檔案總管視窗：{hwnd: 標題}。"""
+    import ctypes
+    from ctypes import wintypes
+    user32, found = ctypes.windll.user32, {}
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        if cls.value == "CabinetWClass" and user32.IsWindowVisible(hwnd):
+            title = ctypes.create_unicode_buffer(260)
+            user32.GetWindowTextW(hwnd, title, 260)
+            found[hwnd] = title.value
+        return True
+    user32.EnumWindows(each, 0)
+    return found
+
+
+def bring_to_front(hwnd):
+    """背景程式把視窗切到最前面：暫時接上目前前景視窗的輸入執行緒再切換；
+    就算 Windows 還是不給焦點，也先設成「最上層」再取消，至少視窗會出現在瀏覽器前面。"""
+    import ctypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    SWP = 0x0001 | 0x0002 | 0x0040                     # NOSIZE | NOMOVE | SHOWWINDOW
+    user32.ShowWindow(hwnd, 9)                         # SW_RESTORE（最小化時也還原）
+    fg = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg, None)
+    me = kernel32.GetCurrentThreadId()
+    attached = bool(fg_thread) and fg_thread != me and user32.AttachThreadInput(me, fg_thread, True)
+    try:
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, SWP)    # HWND_TOPMOST
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, SWP)    # HWND_NOTOPMOST：保持在前面但不一直置頂
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, fg_thread, False)
+
+
+def open_folder_front(folder):
+    """打開資料夾並把檔案總管視窗拉到最前面。
+    伺服器是背景程式，Windows 不讓它開的視窗搶到前景（會被瀏覽器蓋住），
+    所以開完後找到那個視窗，用「先送一個 Alt 鍵」的方式取得前景權限再切過去。"""
+    if os.name != "nt":
+        return
+    try:
+        before = _explorer_windows()
+    except Exception:
+        before = {}
+    subprocess.Popen(["explorer", str(folder)], creationflags=NO_WINDOW)
+
+    def bring_front():
+        import ctypes
+        user32 = ctypes.windll.user32
+        for _ in range(30):                     # 最多等 3 秒讓視窗出現
+            time.sleep(0.1)
+            try:
+                wins = _explorer_windows()
+            except Exception:
+                return
+            new = [h for h in wins if h not in before]
+            # 已經開著同一個資料夾時 explorer 會沿用舊視窗；標題像「output - 檔案總管」
+            same = [h for h, t in wins.items() if t == folder.name or t.startswith(folder.name + " - ")]
+            target = (new or same or [None])[0]
+            if target:
+                bring_to_front(target)
+                return
+    threading.Thread(target=bring_front, daemon=True).start()
+
+
+FOLDERS = {"output": OUTPUT,"images": BG_DIR, "setting": SETTING_DIR, "data": DATA}
 OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md、txt、csv、程式碼），請用 write_to_file 存到 {dir}\\ 資料夾，"
                "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。")
 
@@ -768,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
             if not folder:
                 return self.send_json({"ok": False, "message": "不認得的資料夾"})
             folder.mkdir(parents=True, exist_ok=True)
-            os.startfile(folder)
+            open_folder_front(folder)
             return self.send_json({"ok": True, "path": str(folder)})
         if u.path == "/api/backgrounds/upload":    # 從設定面板直接加入背景圖片
             d = self.body()
