@@ -319,7 +319,8 @@ def decide_tool(payload):
     tool, args = str(call.get("name") or ""), call.get("args") or {}
     cid = str(payload.get("conversationId") or "")
     run = ACTIVE.get(cid)
-    roots = [WORK, OUTPUT, UPLOADS] + ([Path(run["cwd"])] if run else [])
+    work = bool(run and run.get("work_dir"))       # 工作模式：專案綁定了資料夾
+    roots = [WORK, OUTPUT, UPLOADS] + ([Path(run["cwd"])] if run else []) + ([Path(run["work_dir"])] if work else [])
     command = str(args.get("CommandLine") or "")
     if tool == "run_command" and lumina_ok(command, str(args.get("Cwd") or ""), roots):
         if not components.installed("pdfium"):
@@ -344,7 +345,8 @@ def decide_tool(payload):
             return {"decision": "deny", "reason": f"這個 PDF 有 {f.stat().st_size // 1048576} MB，整本讀進來會讓之後每一輪都變慢。"
                                                   "請改用 lumina：pdf-info 看目錄、pdf-find 搜尋、pdf-text 讀指定頁、"
                                                   "pdf-thumbs 找位置、pdf-page 看清楚的頁面。"}
-    a = command_guard.assess(tool, args, roots)
+    # 對話模式：修改檔案只能寫到 output（讀檔不受影響）；工作模式才能改綁定的資料夾
+    a = command_guard.assess(tool, args, roots if (work or tool == "run_command") else [OUTPUT])
     base ={"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
 
     def done(decision, reason="", note="", asked=False):
@@ -361,9 +363,9 @@ def decide_tool(payload):
         return done("deny", f"這個操作被介面的安全規則擋下（{why}），不能執行。請改用其他方法，或直接回答使用者。", why)
     if tool != "run_command":
         return {"decision": "allow"}
-    if not load_settings().get("allow_commands"):
-        return done("deny", "使用者沒有開啟「允許執行指令」，不能用終端機。請改用 view_file 等工具讀取檔案，然後直接回答。",
-                    "沒有開啟允許執行指令")
+    if not work:
+        return done("deny", "這是對話模式，不能執行終端機指令（內建的 lumina 工具除外）。請改用 view_file、lumina 讀取資料後直接回答；"
+                            "如果真的需要執行程式，請告訴使用者：把專案切換到「工作模式」並綁定資料夾後就可以。", "對話模式")
     if not run:
         return done("deny", "背景工作不能執行指令。", "背景工作")
     network = any("網路" in w for w in a["warnings"])
@@ -707,7 +709,8 @@ TOOLS_HINT = ("\n\n[內建工具：讀 PDF] 這個介面提供唯讀的 lumina �
               "檔案路徑用完整路徑並加上引號；指令一次只執行一個，不要用 ; | && 串接。")
 
 # ---------- 桌面捷徑 ----------
-SHORTCUT_NAME = "Antigravity UI.lnk"
+SHORTCUT_NAME = "Lumina.lnk"
+OLD_SHORTCUT = "Antigravity UI.lnk"         # v2.0.0 改名前的捷徑：啟動時換成新的
 
 
 def desktop_dir():
@@ -724,14 +727,14 @@ def desktop_dir():
 
 
 def create_shortcut():
-    """在桌面建立「Antigravity UI」捷徑：用 wscript 執行 啟動.vbs，圖示用 static/icon.ico。已存在就覆蓋（例如資料夾搬過）。"""
+    """在桌面建立「Lumina」捷徑：用 wscript 執行 啟動.vbs，圖示用 static/icon.ico。已存在就覆蓋（例如資料夾搬過）。"""
     script = ("$ws = New-Object -ComObject WScript.Shell; "
               "$s = $ws.CreateShortcut($env:AGUI_LNK); "
               "$s.TargetPath = Join-Path $env:WINDIR 'System32\\wscript.exe'; "
               "$s.Arguments = '\"' + $env:AGUI_VBS + '\"'; "
               "$s.WorkingDirectory = $env:AGUI_DIR; "
               "$s.IconLocation = $env:AGUI_ICO + ',0'; "
-              "$s.Description = 'Antigravity UI'; "
+              "$s.Description = 'Lumina'; "
               "$s.Save()")
     lnk = desktop_dir() / SHORTCUT_NAME
     env = dict(os.environ, AGUI_LNK=str(lnk), AGUI_VBS=str(ROOT / "啟動.vbs"),
@@ -742,6 +745,17 @@ def create_shortcut():
     if r.returncode != 0 or not lnk.exists():
         raise RuntimeError((r.stderr or r.stdout or "未知的錯誤").strip()[:300])
     return lnk
+
+
+def migrate_shortcut():
+    """改名 Lumina 後：桌面上舊的「Antigravity UI」捷徑換成新名稱與新圖示（使用者沒建過捷徑就不動）。"""
+    old = desktop_dir() / OLD_SHORTCUT
+    if old.exists():
+        try:
+            create_shortcut()
+            old.unlink()
+        except Exception:
+            pass
 SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並在最後列出參考來源網址。]"
 
 
@@ -914,6 +928,34 @@ def human_size(n):
 
 
 # ---------- 專案 ----------
+def work_folder(pr):
+    """專案是工作模式且綁定的資料夾還在：回傳路徑字串；否則 None（對話模式）。"""
+    if not pr or pr.get("mode") != "work":
+        return None
+    d = Path(pr.get("work_dir") or "")
+    return str(d.resolve()) if d.is_absolute() and d.is_dir() else None
+
+
+def check_work_dir(path):
+    """綁定前檢查：不能是磁碟根目錄、使用者資料夾本身、系統資料夾或這個介面自己。回傳錯誤訊息或空字串。"""
+    try:
+        d = Path(path).resolve()
+    except (OSError, ValueError):
+        return "路徑格式不對"
+    if not d.is_dir():
+        return "找不到這個資料夾"
+    home = Path.home().resolve()
+    bad = [Path(d.anchor), home, home / "Desktop", home / "Documents", home / "Downloads"]
+    if d in bad or len(d.parts) <= 2:
+        return "範圍太大：請選一個專案自己的資料夾（不要選整個磁碟、桌面、文件或下載）"
+    low = str(d).lower()
+    if any(k in low for k in (r"\windows", r"\program files", r"\programdata", r"\appdata")):
+        return "不能選系統或程式的資料夾"
+    if d == ROOT or ROOT in d.parents or d in ROOT.parents:
+        return "不能選這個介面自己的資料夾"
+    return ""
+
+
 def proj_dir(pid):
     return PROJECTS / re.sub(r"[^0-9a-f]", "", pid or "")
 
@@ -1756,6 +1798,13 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(d.get("memory"), str) and len(d["memory"].strip()) > MEMORY_MAX:
                 return self.send_json({"ok": False, "message": f"專案記憶最多 {MEMORY_MAX} 字（目前 {len(d['memory'].strip())} 字），請刪減後再儲存。"})
             old_out = out_dir(pr, create=False)
+            if d.get("mode") in ("chat", "work"):
+                if d["mode"] == "work":
+                    err = check_work_dir(str(d.get("work_dir") or ""))
+                    if err:
+                        return self.send_json({"ok": False, "message": f"工作資料夾：{err}"})
+                    pr["work_dir"] = str(Path(d["work_dir"]).resolve())
+                pr["mode"] = d["mode"]
             for k in ("name", "instructions", "memory"):
                 if isinstance(d.get(k), str):
                     pr[k] = d[k].strip()[:60] if k == "name" else d[k]
@@ -1846,8 +1895,11 @@ class Handler(BaseHTTPRequestHandler):
         # 專案對話在專案資料夾裡跑，附件卻在 uploads：把 uploads 加進工作區
         # output：讓 AI 能把產生的檔案存進去。主目錄在 agy 的「信任工作區」裡，檔案修改預設要人工審查，
         # 非互動模式沒辦法審查就會被拒；accept-edits 只對工作區（cwd + --add-dir）內有效，主目錄其他地方照樣不能改
+        work_dir = work_folder(pr)              # 工作模式：模型可以修改這個資料夾、執行指令（每次詢問）
         cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json",
                "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
+        if work_dir:
+            cmd += ["--add-dir", work_dir]
         if model:
             cmd += ["--model", model]
         # 不傳 --effort：模型 ID 本身已含強度（如 -high），另外加會衝突，Claude 也不支援
@@ -1874,11 +1926,11 @@ class Handler(BaseHTTPRequestHandler):
 
         write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
         try:                           # 檢查點：記下模型這輪可以改到的資料夾，改壞了可以復原
-            snap = checkpoints.take([cwd, out_dir(pr)])
+            snap = checkpoints.take([cwd, out_dir(pr)] + ([work_dir] if work_dir else []))
         except Exception:
             snap = None
         if cid:
-            ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
+            ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir}
         emit({"event": "run", "run_id": run_id})
         if compacting:
             emit({"event": "compacted", "count": len(prior)})
@@ -1934,7 +1986,7 @@ class Handler(BaseHTTPRequestHandler):
             if ev.get("event") == "init":
                 new_cid = ev.get("conversation_id") or new_cid
                 remember_run(new_cid)
-                ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
+                ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir}
             su = ev.get("step_update") or {}
             if su.get("step_type") == "agent_response" and su.get("text_delta"):
                 reply += su["text_delta"]
@@ -2116,12 +2168,13 @@ def main():
     threading.Thread(target=sync_transcripts, daemon=True).start()
     threading.Thread(target=sync_all_skills, daemon=True).start()
     threading.Thread(target=tidy_output, daemon=True).start()
+    threading.Thread(target=migrate_shortcut, daemon=True).start()
     install_lumina()
     threading.Thread(target=agy_self_update, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
-    print(f"Antigravity 介面：{url}")
+    print(f"Lumina：{url}")
     srv.serve_forever()
 
 

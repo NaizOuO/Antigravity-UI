@@ -1,6 +1,6 @@
 """產生介面圖標（開發者用）：static/icon.png（網頁用）與 static/icon.ico（桌面捷徑用）。
 
-設計「負空間 A」：近黑色圓角方塊；白色實心三角形，底部中間挖空形成 A；右上一顆橘色小點。
+Lumina 的圖示「L 字光束」：近黑色圓角方塊、白色粗 L、右上一顆橘色小點像光源（v2.0.0 起；之前是負空間 A）。
 用法：python tools/make_icon.py（需要 Pillow）
 """
 
@@ -18,9 +18,9 @@ def draw():
     im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.rounded_rectangle([0, 0, S - 1, S - 1], radius=230, fill=BG)
-    d.polygon([(512, 210), (800, 790), (224, 790)], fill="white")        # A 的外框
-    d.polygon([(512, 520), (610, 790), (414, 790)], fill=BG)             # 中間挖空
-    d.ellipse([708, 188, 832, 312], fill=ACCENT)                         # 橘色小點
+    d.rectangle([250, 210, 400, 810], fill="white")                     # L 的直筆
+    d.rectangle([250, 660, 760, 810], fill="white")                     # L 的橫筆
+    d.ellipse([650, 200, 790, 340], fill=ACCENT)                         # 橘色光點
     return im
 
 

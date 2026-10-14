@@ -1,10 +1,10 @@
-# Antigravity CLI 網頁介面
+# Lumina（for Antigravity）
 
 在瀏覽器裡使用 Google Antigravity CLI（`agy`）：可以切換模型、附加圖片／PDF／檔案、建立專案（多份 PDF + 共享記憶）、看用量、開關聯網搜尋。
 每則訊息都是呼叫官方 `agy -p`，登入的是你自己的帳號。
 
 ## 下載
-到 [Releases](https://github.com/NaizOuO/Antigravity-UI/releases/latest) 下載最新的 `Antigravity-UI-v*.zip`，解壓縮到任何地方。
+到 [Releases](https://github.com/NaizOuO/Lumina/releases/latest) 下載最新的 `Antigravity-UI-v*.zip`，解壓縮到任何地方。
 
 ## 需要先準備
 1. 安裝 [Python 3](https://www.python.org/downloads/)（安裝時勾選 "Add python.exe to PATH"）。
@@ -13,7 +13,7 @@
 ## 使用
 - 雙擊 `啟動.vbs`：在背景啟動，並自動打開 http://127.0.0.1:8765
 - 雙擊 `關閉.bat`：關掉背景伺服器
-- **桌面捷徑**：第一次開啟時會詢問要不要在桌面建立「Antigravity UI」捷徑（之後也能從左下角「建立桌面捷徑」建立）。
+- **桌面捷徑**：第一次開啟時會詢問要不要在桌面建立「Lumina」捷徑（之後也能從左下角「建立桌面捷徑」建立）。
   資料夾搬家後，按「重新建立捷徑」即可
 - 左上角顯示目前版本；有新版本時會變成橘色，點一下就能更新
 - **輸出檔案**：請 AI「輸出成 md 檔」之類的，檔案會存在主目錄的 `output` 資料夾；右上角「📂 輸出」可以直接打開

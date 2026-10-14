@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Antigravity 介面</title>
+<title>Lumina</title>
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
@@ -233,6 +233,8 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 .msg.user .mtime{text-align:right}
 .convtime{text-align:center;font-size:12px;color:var(--muted);margin:6px 0 14px}
 body.notimes .mtime,body.notimes .convtime{display:none}
+.pmode label{display:block;font-size:13.5px;margin:4px 0}
+.pmode input[type=text]{width:100%;margin-top:4px}
 .cpbox{font-size:12.5px;color:var(--muted);margin:6px 0}
 .cpbox summary{cursor:pointer;display:flex;align-items:center;gap:8px}
 .cpbox .cprestore{font-size:12px;padding:2px 8px}
@@ -341,7 +343,7 @@ body.resizing{cursor:col-resize;user-select:none}
 <body>
 <div id="bgLayer" aria-hidden="true"></div>
 <aside id="side">
-  <div id="brand"><img src="/icon.png" alt=""><b>Antigravity UI</b><button class="vbadge" id="verBadge" title="檢查更新"></button><button id="collapseSide" title="收起側欄">«</button></div>
+  <div id="brand"><img src="/icon.png" alt=""><b>Lumina</b><button class="vbadge" id="verBadge" title="檢查更新"></button><button id="collapseSide" title="收起側欄">«</button></div>
   <div class="top"><button id="newBtn">＋ 新對話</button></div>
   <div class="sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
   <div id="projs"></div>
@@ -391,6 +393,13 @@ body.resizing{cursor:col-resize;user-select:none}
   <input type="text" id="pname">
   <label class="f">專案指示（這個專案的新對話會自動附上，例如「這些是我們實驗室 transmon 相關論文」）</label>
   <textarea id="pinstr"></textarea>
+  <label class="f">模式</label>
+  <div class="pmode">
+    <label><input type="radio" name="pmode" value="chat"> 💬 對話模式：讀檔、讀 PDF、產生 PDF 與檔案（只寫到 output）；不能執行指令</label>
+    <label><input type="radio" name="pmode" value="work"> 🛠 工作模式：AI 可以修改下面這個資料夾、執行指令（每次跳出授權卡），每輪都有檢查點可以復原</label>
+    <input type="text" id="pworkdir" placeholder="工作資料夾的完整路徑，可以在檔案總管的網址列複製">
+    <p class="note">建議寫程式、整理檔案時才用工作模式；大改動建議換成 Claude Opus（Gemini 寫程式較弱）。</p>
+  </div>
   <label class="f">🧠 專案記憶（這個專案每個新對話開頭都會帶上）</label>
   <textarea id="pmem" hidden></textarea>
   <div id="pmemPreview" class="mempv" title="點一下展開查看／編輯"></div>
@@ -472,10 +481,10 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>顯示訊息時間與對話建立時間</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="show_times"><i></i></label></div>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
-      <div class="srow"><b>允許模型執行指令（每次詢問）</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="allow_commands" id="allowCmd"><i></i></label></div>
-      <p class="note">開啟後，模型想執行指令（例如用 python 讀 PDF、計算數值）時會跳出授權卡，你看過指令再決定：允許一次、這段對話都允許、永遠允許（只限 dir、git status 這類唯讀指令）或拒絕。
-        刪除資料夾、改系統設定、碰密碼與金鑰、修改 agy 或這個介面的設定等操作會直接擋下。
-        <b>注意：允許 python、powershell 等於讓模型在你的電腦上做任何事</b>，Windows 沒有沙盒可以隔離，請看過內容再允許。關閉時模型不能執行任何指令。</p>
+      <div class="srow"><b>執行指令與工作模式</b></div>
+      <p class="note">一般對話和專案預設是「💬 對話模式」：AI 只能讀檔、用內建工具讀 PDF、把檔案寫到 output，不能執行指令。
+        要讓 AI 改程式、執行指令，請在專案設定切換成「🛠 工作模式」並綁定資料夾：執行指令前會跳出授權卡，每輪都有檢查點可以復原。
+        刪除資料夾、改系統設定、碰密碼與金鑰等操作一律擋下。<b>注意：允許 python、powershell 等於讓 AI 在你的電腦上做任何事</b>，請看過內容再允許。</p>
       <div id="permBox"></div>
       <div class="srow"><b>產生 PDF 後讓模型檢查成品</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="pdf_verify"><i></i></label></div>
       <p class="note">PDF 編譯好後，把每一頁轉成圖片讓模型「看成品」：檢查頁數是否符合要求、版面有沒有跑掉、公式（例如括號位置）與內容有沒有錯，有問題就自動修正再重新產生。模型只看原始碼時常看不出這些問題。會多花一點時間與額度。</p>
@@ -510,7 +519,7 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>開啟時檢查新版本</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="update_check"><i></i></label></div>
       <div class="srow"><button id="sCheckUpd">立即檢查</button><span class="meta" id="sUpdText"></span></div>
       <div class="srow"><button id="sShortcut">建立桌面捷徑</button><span class="meta" id="sShortcutText"></span></div>
-      <div class="srow"><b id="sVersion">Antigravity UI</b><span class="sp"></span>
+      <div class="srow"><b id="sVersion">Lumina</b><span class="sp"></span>
         <button id="sReadme">說明文件</button><button id="sGithub">GitHub</button></div>
     </section>
   </div>
@@ -521,7 +530,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </dialog>
 <dialog id="scdlg">
   <h3 style="margin-top:0">建立桌面捷徑</h3>
-  <p>要在桌面建立「Antigravity UI」的捷徑嗎？之後雙擊捷徑就能開啟介面，更新後也會沿用同一個捷徑。</p>
+  <p>要在桌面建立「Lumina」的捷徑嗎？之後雙擊捷徑就能開啟介面，更新後也會沿用同一個捷徑。</p>
   <div class="r"><button id="scNo">不用</button><button id="scYes">建立</button></div>
 </dialog>
 <dialog id="updlg">
@@ -1108,7 +1117,7 @@ async function loadProjects(){
 function paintProjectChip(){
   const p = curProject(), chip = $("#projChip");
   chip.style.display = p ? "inline-block" : "none";
-  if (p) chip.textContent = `📁 ${p.name} · ${p.file_count} 份檔案`;
+  if (p) chip.textContent = `${p.mode === "work" ? "🛠" : "📁"} ${p.name} · ${p.file_count} 份檔案${p.mode === "work" ? " · 工作模式" : ""}`;
   $("#histLabel").textContent = p ? `「${p.name}」的對話` : "一般對話";
 }
 function switchProject(id, keepConv){
@@ -1129,6 +1138,9 @@ async function openProjectDialog(){
   const p = curProject(); if (!p) return;
   const full = await (await fetch("/api/projects/" + p.id)).json();
   $("#pname").value = full.name; $("#pinstr").value = full.instructions || "";
+  const mode = full.mode === "work" ? "work" : "chat";
+  document.querySelector(`input[name=pmode][value=${mode}]`).checked = true;
+  $("#pworkdir").value = full.work_dir || ""; $("#pworkdir").disabled = mode !== "work";
   paintMemory(full);
   paintProjectFiles(full.files);
   if (!$("#pdlg").open) $("#pdlg").showModal();
@@ -1168,9 +1180,14 @@ const pf = $("#pfiles");
 pf.addEventListener("dragleave", () => pf.classList.remove("drag"));
 pf.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); pf.classList.remove("drag"); if (e.dataTransfer?.files?.length) uploadProjectFiles(e.dataTransfer.files); });
 $("#pClose").onclick = () => $("#pdlg").close();
+document.querySelectorAll("input[name=pmode]").forEach(r => r.onchange = () => {
+  $("#pworkdir").disabled = r.value !== "work" || !r.checked; if (r.value === "work" && r.checked) $("#pworkdir").focus();
+});
 $("#pSave").onclick = async () => {
+  const mode = document.querySelector("input[name=pmode]:checked")?.value || "chat";
   const r = await post("/api/project/update", {id:project, name:$("#pname").value, instructions:$("#pinstr").value,
-                                               memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked});
+                                               memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked,
+                                               mode, work_dir:$("#pworkdir").value.trim().replace(/^"|"$/g, "")});
   if (r.ok === false){ alert(r.message); return; }
   $("#pdlg").close(); loadProjects();
 };
@@ -1238,7 +1255,7 @@ async function checkVersionOnly(){       // 關閉「開啟時檢查新版本」
   try {
     const v = await (await fetch("/api/version")).json();
     $("#verText").textContent = $("#verBadge").textContent = "v" + v.version;
-    document.title = `Antigravity 介面 v${v.version}`;
+    document.title = `Lumina v${v.version}`;
   } catch {}
 }
 async function checkUpdate(force){
@@ -1246,7 +1263,7 @@ async function checkUpdate(force){
     const v = await (await fetch("/api/version")).json();
     $("#verText").textContent = "v" + v.version;
     $("#verBadge").textContent = "v" + v.version;
-    document.title = `Antigravity 介面 v${v.version}`;
+    document.title = `Lumina v${v.version}`;
     updInfo = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
   } catch { return; }
   const b = $("#updBtn");
@@ -1257,7 +1274,7 @@ async function checkUpdate(force){
   $("#verBadge").textContent = updInfo.available ? `v${updInfo.current} → v${updInfo.latest}` : `v${updInfo.current}`;
   $("#verBadge").title = updInfo.available ? "有新版本，點這裡更新" : "檢查更新";
   $("#sUpdText").textContent = updInfo.available ? `有新版本 v${updInfo.latest}` : updInfo.error ? "連不上 GitHub，請確認網路後再試" : `目前已經是最新版（v${updInfo.current}）`;
-  $("#sVersion").textContent = `Antigravity UI v${updInfo.current}`;
+  $("#sVersion").textContent = `Lumina v${updInfo.current}`;
   if (force){
     if (updInfo.available) openUpdateDialog();
     else toast(updInfo.error ? "連不上 GitHub，請確認網路後再試" : `已經是最新版（v${updInfo.current}）`);
@@ -1359,6 +1376,7 @@ function emptyState(){
 }
 /* ---------- 一般對話首頁：問候、最近的對話、小技巧（打開 AI 都有目的，不放快速開始卡片） ---------- */
 const HOME_TIPS = [
+  "你知道嗎？Lumina 來自於 illuminate，意旨為「照亮方向，啟迪智慧」",
   "直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 就能貼上截圖",
   "把多份 PDF 放進「專案」，模型會自己挑需要的讀",
   "滑鼠移到自己的訊息上可以「✎ 編輯」重新送出",
@@ -1860,8 +1878,8 @@ $("#importFile").onchange = async e => {
   loadProjects(); loadHistory();
 };
 $("#sCheckUpd").onclick = () => checkUpdate(true);
-$("#sReadme").onclick = () => window.open("https://github.com/NaizOuO/Antigravity-UI#readme", "_blank");
-$("#sGithub").onclick = () => window.open("https://github.com/NaizOuO/Antigravity-UI", "_blank");
+$("#sReadme").onclick = () => window.open("https://github.com/NaizOuO/Lumina#readme", "_blank");
+$("#sGithub").onclick = () => window.open("https://github.com/NaizOuO/Lumina", "_blank");
 
 /* 回答完成提醒：視窗不在前面時，提示音＋分頁標題 */
 function beep(){
