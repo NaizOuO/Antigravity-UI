@@ -555,6 +555,8 @@ function renderMd(src){
            .replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => keep(t, true))
            .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => keep(t, false))
            .replace(/(^|[^\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g, (_, pre, t) => pre + keep(t, false));
+  // 粗體自己先轉：marked 依 CommonMark 規則，**…** 緊貼中文標點（例如「**結論：**中文」）時不會變粗體
+  src = src.replace(/\*\*(?=\S)([^\n*]*?\S)\*\*/g, "<strong>$1</strong>");
   src = src.replace(/@@CODE(\d+)@@/g, (_, i) => codes[i]);
   // 本機圖片與檔案連結（Nano Banana 的圖、產生的 PDF）：在清理 HTML 前先換成伺服器網址（file: 會被 DOMPurify 拿掉）
   src = src.replace(/(!?)\[([^\]]*)\]\(file:\/\/\/([^)\s]+)\)/g, (_, bang, alt, p) =>
@@ -729,7 +731,8 @@ function startStatus(a){
   // 轉圈只建立一次，每秒只更新文字，動畫才不會每秒重來
   a.status.innerHTML = `<span class="spin"></span><span class="stxt"></span>`;
   const txt = a.status.querySelector(".stxt");
-  const paint = () => { txt.textContent = `${phase}… ${Math.floor((Date.now() - t0) / 1000)} 秒`; };
+  const who = modelLabel(currentModel()) || "Gemini 3.8 Flash · high（預設）";
+  const paint = () => { txt.textContent = `${who}｜${phase}… ${Math.floor((Date.now() - t0) / 1000)} 秒`; };
   a.status.hidden = false; paint();
   const timer = setInterval(paint, 1000);
   return {
@@ -818,6 +821,13 @@ async function runTurn(text, files, fork){
         }
         if (ev.event === "permission") showPermissionCard(a, ev, st);
         if (ev.event === "checkpoint") showCheckpoint(a, ev);
+        if (ev.event === "compacted" || ev.event === "compact_soon"){
+          const n = document.createElement("div"); n.className = "permnote ok";
+          n.textContent = ev.event === "compacted"
+            ? `📦 前面 ${ev.count} 則訊息已整理成摘要，交給新的對話接手（對話太長時會變慢、多花額度）。畫面上的內容都還在。`
+            : "📦 這段對話已經很長，下一則訊息會先自動把前文整理成摘要，速度會比較快。";
+          ev.event === "compacted" ? a.el.prepend(n) : a.el.insertBefore(n, a.meta);
+        }
         if (ev.event === "permission_done") showPermissionNote(a, ev);
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }

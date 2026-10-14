@@ -1,14 +1,14 @@
 {
- "version": "1.6.0",
+ "version": "1.7.0",
  "files": {
-  "server.py": "aa85ce941a99e0674845676dcb402858fd8437aaddcaf5592cfe19278836c565",
-  "version.py": "a8bfb4d22571eda297774a0e6735714b4532a330deb7676011911761172bff1a",
+  "server.py": "70970742669488dd0e3f4fd760b200e45a45979727409c9cc31b206af8d684b1",
+  "version.py": "635aca6883adae690379c5a37d9ba74e47553a1bb1c3883d20481b152c613eb2",
   "updater.py": "042a2a30cb1cfebde1f893de483a5e2d66d622771d95ae7b7f594b360ad0f5c3",
   "components.py": "28c741f74ce6d3172dbc77eabf9e2522dae1787f44e49ae18524b301409df8d4",
   "command_guard.py": "5ccd49ff94cf1b0d5f266bee5bddef434faccf54daa505a940037706a57c14e4",
   "checkpoints.py": "c206ce3d3b57a1c0223dd2d7709d6ec21505585c2792ae40d3408a5c9538f986",
   "tools/lumina.py": "6e16c72f3526986fb44e3eccddb18d15a6f848d1dd285cd3ca79d53be685d5ac",
-  "static/index.html": "b193d054472675da97f08b834679627f210bb58074259eb45be33ea1f34ceb0c",
+  "static/index.html": "4c6a90371a30ccf3684943abac713230f97a73dbadd7c366156afc63f6892f21",
   "skills/pdf-document/SKILL.md": "98d94282a6505d2e3cae49d27a91fabd626978bf6318c21ff704666829450032",
   "skills/pdf-document/references/packages.md": "8cfcc31a24311ce8d2d0a5156582d47850e79b930e4af2119cf08ad7f156ab55",
   "skills/pdf-document/references/notes.typ": "131425f0434d34b48a7f1491518f991b54491b350ebc93e1acc03bcd8971739f",

@@ -231,6 +231,7 @@ def sync_skills(target):
 # ---------- 工具授權：agy 執行任何工具前會呼叫 hook，由伺服器判斷、必要時在介面詢問使用者 ----------
 PERMS_FILE = SETTING_DIR / "permissions.json"        # {"always": ["git status", "dir", ...]}
 PERM_LOG = DATA / "permission_log.jsonl"
+BIG_PDF = 3 * 1024 * 1024                         # 超過就不讓 view_file 整本讀（改用 lumina）
 PERM_WAIT = 170                                       # 等使用者回應的秒數（hook 本身的上限設 200 秒）
 ACTIVE = {}          # conversation id -> {"emit", "cwd", "run_id"}：正在介面上串流的對話
 CONV_ALLOW = {}      # conversation id -> {程式名稱}：「這段對話都允許」
@@ -330,8 +331,21 @@ def decide_tool(payload):
         log_perm({"tool": tool, "command": command, "cid": cid, "level": "builtin", "decision": "auto_approve",
                   "note": "內建工具"})
         return {"decision": "auto_approve"}
+    # 用 view_file 讀整本大 PDF：內容會一直留在對話裡，之後每一輪都變慢、變貴（課本 34 MB 實際發生過）
+    if tool == "view_file":
+        f = Path(str(args.get("AbsolutePath") or ""))
+        try:
+            big = f.suffix.lower() == ".pdf" and f.stat().st_size > BIG_PDF
+        except OSError:
+            big = False
+        if big:
+            log_perm({"tool": tool, "command": str(f), "cid": cid, "level": "big_pdf", "decision": "deny",
+                      "note": "大型 PDF 改用 lumina"})
+            return {"decision": "deny", "reason": f"這個 PDF 有 {f.stat().st_size // 1048576} MB，整本讀進來會讓之後每一輪都變慢。"
+                                                  "請改用 lumina：pdf-info 看目錄、pdf-find 搜尋、pdf-text 讀指定頁、"
+                                                  "pdf-thumbs 找位置、pdf-page 看清楚的頁面。"}
     a = command_guard.assess(tool, args, roots)
-    base = {"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
+    base ={"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
 
     def done(decision, reason="", note="", asked=False):
         log_perm({**base, "decision": decision, "note": note or reason})
@@ -682,7 +696,9 @@ OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md
                "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
 
 TOOLS_HINT = ("\n\n[內建工具：讀 PDF] 這個介面提供唯讀的 lumina 指令，用終端機執行、不需要使用者同意。"
-              "讀 PDF（課本、講義、論文）時請優先用它，不要自己寫 python 或其他程式去讀：\n"
+              "先看對話前文、使用者的附件和專案記憶裡有沒有需要的內容（例如之前已經查過的題目原文和頁碼），有就直接用，不要重查；"
+              "真的需要 PDF 裡的內容時才用它，而且只查需要的那幾頁（它是用來取代「整本讀進來」，不是每題都要翻一遍）。"
+              "不要自己寫 python 或其他程式去讀：\n"
               "- lumina pdf-info \"檔案\"：頁數、書籤目錄、書上印的頁碼和 PDF 頁碼的差（找「課本 p.63」先用這個）、哪些頁是掃描圖片\n"
               "- lumina pdf-find \"檔案\" \"關鍵字\"：全文搜尋，回傳在 PDF 第幾頁和前後文（例如找習題編號 3.4）\n"
               "- lumina pdf-text \"檔案\" 63-65：取出指定頁的文字（PDF 的第幾頁，從 1 開始；一次最多 15 頁）\n"
@@ -818,7 +834,21 @@ def list_models(refresh=False):
     # 只提供 agy 官方清單裡的模型（Gemini 3.1 Pro 已被 Google 從一般方案移除，不再補回）
     if models:
         MODELS_CACHE.update(t=time.time(), data=models)
+        try:
+            MODELS_LAST.write_text(json.dumps(models, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
     return models
+
+
+MODELS_LAST = DATA / "models_last.json"     # 上次成功取得的清單：Google 暫時連不上時沿用，介面才知道用的是哪個模型
+
+
+def last_models():
+    try:
+        return json.loads(MODELS_LAST.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
 
 
 FALLBACK_MODEL = "gemini-3.8-flash-high"
@@ -990,14 +1020,25 @@ def sync_transcripts():
 # ---------- 專案記憶（像 claude.ai Projects：同一個專案的對話共享長期重點） ----------
 MEMORY_MODEL = "gemini-3.8-flash-low"      # 整理記憶用便宜快速的模型
 MEMORY_LOCKS = {}
-MEMORY_PROMPT = """你是專案「{name}」的記憶整理員。這份記憶會在這個專案的每個新對話開頭提供給 AI，讓它記得之前的對話。
+MEMORY_PROMPT = """你是專案「{name}」的記憶整理員。這份記憶會放在這個專案每個新對話的開頭，所以要短、要準、要長期有用。
+做法參考 claude.ai 的專案記憶：記「綜合後的重點」，不記過程；單次對話的細節不放這裡（過去的對話全文另外存著，AI 需要時會自己搜尋）。
 
-請根據「目前的記憶」和「新的對話內容」，輸出更新後的完整記憶：
-- 用繁體中文 Markdown 條列，可以分幾個小標題（例如：使用者背景與偏好、專案目標、已確認的結論與數值、檔案重點、待解決的問題）
-- 只保留之後對話會用到、長期有效的資訊；一次性的閒聊、寒暄、AI 自己的解說過程都不要記
-- 新資訊和舊記憶衝突時以新的為準；過時的刪掉；總長度控制在 40 條、{limit} 字以內
-- 細節不必全記：過去的對話紀錄另外存在專案資料夾，需要時 AI 可以搜尋，記憶只要記重點
-- 沒有值得記的新資訊時，原樣輸出目前的記憶
+請根據「目前的記憶」和「新的對話內容」輸出更新後的完整記憶，固定用這四個小標題（沒有內容的小標題省略）：
+### 使用者
+（身分、背景、長期的偏好與要求，例如回答方式、不要直接給答案）
+### 專案目標與範圍
+（在做什麼、用哪些教材或檔案、目前進度到哪）
+### 重要結論與決定
+（之後還會用到的結論、已確認的事實、做過的決定；一條一句，不寫推導過程與計算細節）
+### 進行中
+（還沒完成、下次可能接著做的事；完成了就刪掉）
+
+規則：
+- 每條一句話，全部最多 15 條、{limit} 字以內；寧可少記，不要把細節塞進來
+- 不要記：公式推導、數值計算過程、程式碼、色碼與排版參數、檔案路徑細節、AI 的解說、寒暄
+- 不要記會變動的環境狀態（例如「目前不能執行指令」「某個模型不能用」），那些不是使用者或專案的事實
+- 新資訊和舊記憶衝突時以新的為準；過時或已完成的刪掉；目前的記憶太長時，順便精簡到符合上面的規定
+- 這次對話沒有值得長期記住的新資訊時，原樣輸出目前的記憶（大部分對話都是這種情況）
 - 只輸出記憶本身，不要任何前言或結語，也不要使用任何工具
 
 ## 目前的記憶
@@ -1018,7 +1059,7 @@ def memory_model():
     return next((i for i in ids if "flash" in i and i.endswith("-low")), None)
 
 
-MEMORY_MAX = 3000          # 記憶的硬上限（字數）；每個新對話都會帶上它，太長會一直多花 token
+MEMORY_MAX = 1500          # 記憶的硬上限（字數）；每個新對話都會帶上它，太長會一直多花 token
 COMPRESS_PROMPT = """下面是專案「{name}」的記憶，目前 {length} 字，超過上限 {limit} 字。
 請把它壓縮到 {target} 字以內：合併重複的條目、刪掉較不重要或已過時的細節，保留使用者背景與偏好、專案目標、已確認的結論與數值、待解決的問題。
 格式維持繁體中文 Markdown 條列。只輸出壓縮後的記憶本身，不要任何前言或結語，也不要使用任何工具。
@@ -1027,14 +1068,14 @@ COMPRESS_PROMPT = """下面是專案「{name}」的記憶，目前 {length} 字�
 """
 
 
-def run_agy_text(prompt, name):
+def run_agy_text(prompt, name, model=None):
     """用記憶模型跑一次 agy，回傳文字結果（失敗時丟出 RuntimeError）。"""
     if len(prompt) > MAX_ARG:      # 內容太長：存成檔案讓模型讀
         f = WORK / f"{name}.md"
         f.write_text(prompt, encoding="utf-8")
         prompt = f"請用 view_file 完整讀取這個檔案，並嚴格依照檔案裡的指示輸出：\n- {f}"
     cmd = [agy_exe(), "-p", prompt, "--output-format", "json"]
-    model = memory_model()
+    model = model or memory_model()
     if model:
         cmd += ["--model", model]
     try:
@@ -1177,6 +1218,45 @@ def save_turn(cid, model, user_msg, reply, project=None):
 # ---------- 重問 / 編輯：從某則訊息之前分支出新的對話 ----------
 # agy 的非互動模式不能倒回對話，所以把「保留的前半段」整理成背景，開一個新的 agy 對話接著問，
 # 完成後用新對話取代舊的（標題、建立時間、專案沿用）。介面上看到的內容就和模型實際記得的一致。
+COMPACT_AT = 100_000      # 一輪的輸入超過這麼多 tokens（≈ 對話目前的長度），下一則訊息先壓縮前文
+COMPACT_PROMPT = """把下面這段使用者和 AI 的對話整理成「接手用的摘要」，讓另一個 AI 只看摘要就能無縫接著聊。
+用繁體中文，固定用這幾個小標題（沒有內容就省略）：
+### 使用者的目標
+### 已經完成、已經確認的事（結論、答案、使用者確認過的數值或公式，公式用 LaTeX，要精確）
+### 使用者的要求與偏好（例如不要直接給答案、格式要求）
+### 目前進行到哪、還沒解決的問題
+### 用到的檔案（完整路徑；之後需要時可以重新讀）
+只寫之後會用到的內容，不要寫寒暄和 AI 的解說過程；總長度 2500 字以內。只輸出摘要本身，不要使用任何工具。
+
+## 對話
+{transcript}
+"""
+
+
+def compact_block(messages):
+    """壓縮：前面的對話整理成摘要，最近兩輪保留原文，交給新的 agy 對話接手（參考 Claude Code 的 compaction）。"""
+    def fmt(ms, limit):
+        out = []
+        for m in ms:
+            t = (m.get("text") or "")[:limit]
+            if m.get("files"):
+                t += "\n（附件：" + "、".join(m["files"]) + "）"
+            out.append(("使用者：" if m["role"] == "user" else "AI：") + t)
+        return "\n\n".join(out)
+    head, tail = messages[:-4], messages[-4:]
+    summary = ""
+    if head:
+        try:
+            summary = run_agy_text(COMPACT_PROMPT.format(transcript=fmt(head, 4000)[-120000:]), "compact", FALLBACK_MODEL).strip()
+        except Exception:
+            summary = ""
+        if not summary:                     # 摘要失敗：退回原本的做法（附上原文）
+            return history_block(messages)
+    return ("[先前的對話（已壓縮）] 這段對話很長，前面的部分整理成下面的摘要，最近幾輪附上原文。"
+            "請把它們當成你和使用者之前的對話，接著回答最後的新訊息；需要細節時可以用 view_file 重新讀附件或檔案。\n\n"
+            + (f"## 前面對話的摘要\n{summary}\n\n" if summary else "") + "## 最近幾輪原文\n" + fmt(tail, 8000))
+
+
 def history_block(prior):
     if not prior:
         return ""
@@ -1370,8 +1450,15 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/models":
             if not agy_installed():
                 return self.send_json({"models": [], "error": AGY_MISSING})
+            stale = None
             try:
                 models = list_models(refresh=q.get("refresh", ["0"])[0] == "1")
+            except Exception as e:
+                models, stale = [], str(e)
+            if not models and last_models():            # 暫時連不上：用上次的清單，不要變成「用預設」而不知道是哪個模型
+                return self.send_json({"models": last_models(), "replace": "", "stale": True,
+                                       "error": "暫時連不上 Google 取得模型清單，先用上次的清單（回答時如果失敗會自動重試）。"})
+            try:
                 want = q.get("want", [""])[0]         # 介面上次選的模型；若已下架，告訴介面該換成哪個
                 return self.send_json({"models": models,
                                        "replace": replacement_model(want, [m["id"] for m in models]) if want else "",
@@ -1723,11 +1810,17 @@ class Handler(BaseHTTPRequestHandler):
         text, files = d.get("text", ""), d.get("files", [])
         files = [f for f in files if inside(f, ROOT)]
         model, cid = d.get("model"), d.get("conversation_id")
-        # 舊分頁還選著已下架的模型：直接改用替代模型，不浪費時間重試
-        asked, model = model, replacement_model(model, available_ids())
+        # 舊分頁還選著已下架的模型：直接改用替代模型，不浪費時間重試；沒選模型就用預設，不要交給 agy 自己挑
+        asked, model = model, replacement_model(model, available_ids()) or FALLBACK_MODEL
         pr = load_project(d.get("project"))
         # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
         fork, old, prior = d.get("fork"), None, []
+        compacting = False
+        if cid and not fork:                # 上一輪發現對話太長：這次先壓縮前文，開新的 agy 對話接手
+            cur = load_hist(cid)
+            if cur and cur.get("compact") and cur.get("messages"):
+                old, prior, cid, compacting = cur, cur["messages"], None, True
+                pr = load_project(cur.get("project")) or pr
         if fork:
             old = load_hist(fork.get("from") or "")
             if old:
@@ -1745,7 +1838,7 @@ class Handler(BaseHTTPRequestHandler):
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
             if prior:
-                instructions += "\n\n" + history_block(prior)
+                instructions += "\n\n" + (compact_block(prior) if compacting or len(prior) > 12 else history_block(prior))
         extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=out_dir(pr)) + TOOLS_HINT
         prompt = build_prompt(text + extra_hint, files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
@@ -1787,6 +1880,8 @@ class Handler(BaseHTTPRequestHandler):
         if cid:
             ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
         emit({"event": "run", "run_id": run_id})
+        if compacting:
+            emit({"event": "compacted", "count": len(prior)})
         if asked and model != asked:
             emit({"event": "model_switched", "from": asked, "to": model})
         # agy 1.3.3 的模型目錄時有時無（同一個模型大約一半的機率被判定「不存在」），
@@ -1816,6 +1911,7 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(4 if busy else 2)
 
         reply, steps, new_cid, raw_other, denied = "", [], cid, [], []
+        compact_next = False
         if proc is None:                        # 重試用完仍失敗：把 agy 的輸出當成錯誤訊息
             raw_other = [l for l in pre_output.splitlines() if l.strip()]
             lines = []
@@ -1851,6 +1947,7 @@ class Handler(BaseHTTPRequestHandler):
                 u = r.get("usage") or {}
                 if new_cid and isinstance(u.get("total_tokens"), int):
                     u["turn_tokens"] = turn_tokens(new_cid, u["total_tokens"])
+                    compact_next = u["turn_tokens"] > COMPACT_AT
                 reply = r.get("response") or reply
                 denied = [a.get("display_name") or a.get("action") for a in r.get("denied_actions") or []]
             emit(ev)
@@ -1945,6 +2042,13 @@ class Handler(BaseHTTPRequestHandler):
                     drop_brain(old["id"])          # 被取代的分支：agy 的暫存也清掉
             else:
                 save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None)
+            if compact_next:                   # 對話已經很長：記下來，下一則訊息先壓縮前文
+                with HIST_LOCK:
+                    h = load_hist(new_cid)
+                    if h:
+                        h["compact"] = True
+                        write_hist(h)
+                emit({"event": "compact_soon"})
             # 新對話，或重問／編輯第一則（使用者沒自己取過名稱時）：背景用 Flash 取標題
             if reply and (is_new or (old and not prior and not user_named(old))):
                 threading.Thread(target=auto_title, args=(new_cid, text, reply), daemon=True).start()
