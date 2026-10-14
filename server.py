@@ -555,6 +555,9 @@ def load_settings():
     return s
 
 
+USAGE_CACHE = DATA / "usage_cache.json"     # 上次查到的用量：開頁面時先顯示，背景查到新的再換掉
+
+
 def get_usage():
     out = subprocess.run([agy_exe(), "-p", "/usage", "--output-format", "json"], cwd=WORK,
                          capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -563,6 +566,30 @@ def get_usage():
     return (data.get("command") or {}).get("data") or {}
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW：不跳出黑色視窗
+# agy 執行時若「上次檢查更新」超過 15 分鐘，會另外開一個脫離的「--bg-updater」背景程式，
+# 它會自己跳出主控台視窗（畫面閃一下；AGY_CLI_DISABLE_AUTO_UPDATE 實測無效）。
+# 所以每次啟動 agy 前先把檢查時間更新成現在（agy 只看這個檔案的修改時間），
+# 改由 agy_self_update() 定期在背景隱藏執行 `agy update`。
+AGY_LAST_CHECK = Path.home() / ".gemini" / "antigravity-cli" / "last_check.timestamp"
+AGY_UPDATE_EVERY = 6 * 3600
+
+
+def quiet_agy_updater():
+    try:
+        AGY_LAST_CHECK.parent.mkdir(parents=True, exist_ok=True)
+        AGY_LAST_CHECK.touch()
+        os.utime(AGY_LAST_CHECK)
+    except OSError:
+        pass
+
+
+def agy_self_update():
+    while True:
+        try:
+            subprocess.run([agy_exe(), "update"], capture_output=True, creationflags=NO_WINDOW, timeout=600)
+        except Exception:
+            pass
+        time.sleep(AGY_UPDATE_EVERY)
 MAX_ARG = 24000                                   # Windows 命令列長度保守上限
 
 RUNS = {}            # run_id -> Popen
@@ -573,7 +600,9 @@ MODELS_CACHE = {"t": 0, "data": None}
 
 
 def agy_exe():
+    """agy 執行檔路徑。每次要啟動 agy 都會呼叫這裡，順便擋掉會跳視窗的背景更新。"""
     import shutil
+    quiet_agy_updater()
     local = Path(os.environ.get("LOCALAPPDATA", "")) / "agy" / "bin" / "agy.exe"
     if local.exists():
         return str(local)
@@ -1170,8 +1199,17 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/update/check":
             return self.send_json(updater.check(force=q.get("force", ["0"])[0] == "1"))
         if u.path == "/api/usage":
+            if q.get("cached", ["0"])[0] == "1":     # 開頁面先顯示上次的數值，不用等 agy
+                try:
+                    return self.send_json(json.loads(USAGE_CACHE.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    return self.send_json({})
             try:
-                return self.send_json(get_usage())
+                data = get_usage()
+                if data.get("groups"):
+                    USAGE_CACHE.write_text(json.dumps({**data, "cached_at": time.time()}, ensure_ascii=False),
+                                           encoding="utf-8")
+                return self.send_json(data)
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
         if u.path == "/api/projects":
@@ -1724,6 +1762,7 @@ def main():
     threading.Thread(target=sync_transcripts, daemon=True).start()
     threading.Thread(target=sync_all_skills, daemon=True).start()
     threading.Thread(target=tidy_output, daemon=True).start()
+    threading.Thread(target=agy_self_update, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()

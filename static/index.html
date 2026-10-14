@@ -926,8 +926,13 @@ paintSearch();
 let usage = null;
 const groupOf = id => /^gemini/i.test(id || "") ? 0 : 1;   // agy /usage：Gemini 一組，Claude/GPT 一組
 const pct = f => Math.round((f ?? 0) * 100);
+// 存下來的舊數值：重置時間已經過了，那一格就當作已經恢復
+const leftOf = b => b.reset_time && new Date(b.reset_time) < Date.now() ? 1 : (b.remaining_fraction ?? 1);
 const localTime = s => new Date(s).toLocaleString("zh-TW", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false});
 async function refreshUsage(){
+  if (!usage){                       // 先用上次存下來的數值，查詢 agy 要等十幾秒
+    try { const c = await (await fetch("/api/usage?cached=1")).json(); if (c.groups && !usage){ usage = c; paintUsage(); } } catch {}
+  }
   try {
     const j = await (await fetch("/api/usage")).json();
     if (j.groups) usage = j;
@@ -945,7 +950,7 @@ function paintUsage(){
   const g = usage.groups[groupOf(currentModel())] || usage.groups[0];
   const rows = [["5h", g.buckets.find(x => x.window === "5h")], ["7d", g.buckets.find(x => x.window === "weekly")]];
   chip.innerHTML = rows.filter(([, b]) => b).map(([label, b]) => {
-    const used = Math.min(100, Math.max(0, Math.round((1 - (b.remaining_fraction ?? 1)) * 100)));
+    const used = Math.min(100, Math.max(0, Math.round((1 - leftOf(b)) * 100)));
     const filled = used > 0 ? Math.max(1, Math.round(used / 10)) : 0, hot = used >= 85 ? " hot" : "";
     const segs = Array.from({length:10}, (_, i) => `<i class="${i < filled ? "f" + hot : ""}"></i>`).join("");
     return `<span class="urow"><span class="ul">${label}</span><span class="segs">${segs}</span><span class="uv${hot}">${used}% · ${countdown(b.reset_time)}</span></span>`;
@@ -966,7 +971,7 @@ function paintUsageDialog(){
     d.querySelector("h4").textContent = g.name + (gi === cur ? "（目前模型）" : "");
     d.querySelector(".d").textContent = g.description || "";
     for (const b of g.buckets){
-      const p = pct(b.remaining_fraction);
+      const p = pct(leftOf(b));
       const x = document.createElement("div"); x.className = "ubar";
       x.innerHTML = `<div class="l"><span></span><b>${p}%</b></div><div class="t"><div class="f${p < 20 ? " low" : ""}" style="width:${p}%"></div></div><div class="r"></div>`;
       x.querySelector("span").textContent = b.window === "5h" ? "5 小時額度" : b.window === "weekly" ? "每週額度" : b.name;
@@ -1742,7 +1747,7 @@ function checkQuota(reset){
   if (!usage || !th) return;
   const g = usage.groups[groupOf(currentModel())]; if (!g) return;
   for (const b of g.buckets){
-    const left = Math.round((b.remaining_fraction ?? 1) * 100), key = g.name + b.window;
+    const left = Math.round(leftOf(b) * 100), key = g.name + b.window;
     if (left < th && !warned.has(key)){
       warned.add(key);
       $("#banner").hidden = false;

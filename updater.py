@@ -20,6 +20,8 @@ from pathlib import Path
 
 import version
 
+APP_DIR = Path(__file__).resolve().parent
+
 REPO = "NaizOuO/Antigravity-UI"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
@@ -54,11 +56,25 @@ def file_sha256(path):
 _cache = {"t": 0, "result": None}
 
 
+def disk_version():
+    """version.py 目前的內容（伺服器啟動後才改版號時，記憶體裡的 version.VERSION 會是舊的）。"""
+    import re
+    try:
+        return re.search(r'VERSION = "([^"]+)"', (APP_DIR / "version.py").read_text(encoding="utf-8")).group(1)
+    except (OSError, AttributeError):
+        return version.VERSION
+
+
 def check(force=False):
     """回傳 {"current", "latest", "available", "notes", "url", "size", "sha256", "page"}；連不上時 error 有原因。"""
     if not force and _cache["result"] and time.time() - _cache["t"] < CHECK_TTL:
         return _cache["result"]
-    result = {"current": version.VERSION, "available": False, "page": RELEASES_PAGE}
+    current = disk_version()
+    result = {"current": current, "available": False, "page": RELEASES_PAGE}
+    if (APP_DIR / ".git").exists():
+        # 開發者的資料夾（git 倉庫）：程式就是從這裡發布的，不要提示更新，也不能讓更新覆蓋開發中的檔案
+        result["dev"] = True
+        return result
     try:
         data = _get_json(LATEST_URL)
         tag = str(data.get("tag_name", ""))
@@ -67,7 +83,7 @@ def check(force=False):
         digest = str((asset or {}).get("digest") or "")
         result.update(
             latest=tag.lstrip("vV"),
-            available=bool(asset) and version.parse(tag) > version.parse(version.VERSION),
+            available=bool(asset) and version.parse(tag) > version.parse(current),
             notes=str(data.get("body") or "").strip(),
             page=data.get("html_url") or RELEASES_PAGE,
             url=(asset or {}).get("browser_download_url", ""),
