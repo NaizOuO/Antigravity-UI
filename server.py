@@ -232,7 +232,8 @@ def sync_skills(target):
 PERMS_FILE = SETTING_DIR / "permissions.json"        # {"always": ["git status", "dir", ...]}
 PERM_LOG = DATA / "permission_log.jsonl"
 BIG_PDF = 3 * 1024 * 1024                         # 超過就不讓 view_file 整本讀（改用 lumina）
-PERM_WAIT = 170                                       # 等使用者回應的秒數（hook 本身的上限設 200 秒）
+PERM_WAIT = 600                                       # 授權卡預設等 10 分鐘（打字慢、要查資料都來得及）
+PERM_MAX = 1800                                       # 按「＋5 分鐘」最多延長到 30 分鐘（hook 的上限再多留一點）
 ACTIVE = {}          # conversation id -> {"emit", "cwd", "run_id"}：正在介面上串流的對話
 CONV_ALLOW = {}      # conversation id -> {程式名稱}：「這段對話都允許」
 PENDING = {}         # 授權請求 id -> {"event", "nonce", "answer", "cid"}
@@ -243,7 +244,7 @@ def hook_command():
     # agy 用 cmd 執行 hook，而且會把引號跳脫成 \"，所以整行不能有引號：
     # 用 Windows 內建的 curl（路徑沒有空格）把 agy 給的 JSON 原封不動轉給伺服器，伺服器回傳決定
     curl = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "curl.exe"
-    return (f"{curl} -s -m {PERM_WAIT + 20} -X POST -H Content-Type:application/json --data-binary @- "
+    return (f"{curl} -s -m {PERM_MAX + 20} -X POST -H Content-Type:application/json --data-binary @- "
             f"http://{HOST}:{PORT}/api/permission/hook")
 
 
@@ -252,7 +253,7 @@ def write_hooks(target):
     d = Path(target) / ".agents"
     d.mkdir(parents=True, exist_ok=True)
     cfg = {"antigravity-ui-guard": {"PreToolUse": [
-        {"matcher": "*", "hooks": [{"type": "command", "command": hook_command(), "timeout": PERM_WAIT + 30}]}]}}
+        {"matcher": "*", "hooks": [{"type": "command", "command": hook_command(), "timeout": PERM_MAX + 30}]}]}}
     text = json.dumps(cfg, ensure_ascii=False, indent=1)
     p = d / "hooks.json"
     try:
@@ -307,13 +308,61 @@ def install_lumina():
     py = Path(sys.executable)
     if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
         py = py.with_name("python.exe")             # 要有主控台輸出，模型才讀得到結果
-    line = f'@"{py}" -X utf8 "{ROOT / "tools" / "lumina.py"}" %*'
-    (bin_dir / "lumina.cmd").write_text(line + "\r\n", encoding="utf-8")
+    # cmd 讀 .cmd 檔用的是系統的 OEM 編碼（繁中是 Big5），不是 UTF-8：路徑有中文（例如 OneDrive\桌面）時會變亂碼、
+    # 找不到程式。所以程式路徑用 %~dp0（cmd 自己展開，不經過編碼），Python 路徑用系統編碼寫，寫不出來就換成短路徑名稱
+    try:
+        import ctypes
+        oem = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+    except Exception:
+        oem = "mbcs"
+    exe = str(py)
+    try:
+        exe.encode(oem)
+    except (UnicodeEncodeError, LookupError):
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(1024)
+            if ctypes.windll.kernel32.GetShortPathNameW(exe, buf, 1024):
+                exe = buf.value
+        except Exception:
+            pass
+    line = f'@"{exe}" -X utf8 "%~dp0..\\..\\tools\\lumina.py" %*'
+    (bin_dir / "lumina.cmd").write_text(line + "\r\n", encoding=oem, errors="replace")
     if str(bin_dir) not in os.environ.get("PATH", ""):
         os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
+HOOK_INFLIGHT, HOOK_RECENT = {}, {}           # agy 每次用工具會呼叫 hook 兩次：同一個呼叫只判斷（只跳卡）一次
+
+
 def decide_tool(payload):
+    """同一個工具呼叫（同對話、同工具、同參數）在處理中或 20 秒內又送來：直接沿用同一個決定。"""
+    call = payload.get("toolCall") or {}
+    key = (str(payload.get("conversationId") or ""), str(call.get("name") or ""),
+           json.dumps(call.get("args") or {}, sort_keys=True, ensure_ascii=False))
+    with PERM_LOCK:
+        for k in [k for k, (t, _) in HOOK_RECENT.items() if time.time() - t > 20]:
+            HOOK_RECENT.pop(k, None)
+        if key in HOOK_RECENT:
+            return HOOK_RECENT[key][1]
+        waiting = HOOK_INFLIGHT.get(key)
+        if not waiting:
+            HOOK_INFLIGHT[key] = threading.Event()
+    if waiting:                                # 第二次呼叫：等第一次的結果
+        waiting.wait(PERM_MAX + 30)
+        with PERM_LOCK:
+            return HOOK_RECENT.get(key, (0, {"decision": "deny", "reason": "等候授權逾時"}))[1]
+    try:
+        result = _decide_tool(payload)
+    except Exception:
+        result = {"decision": "deny", "reason": "介面判斷這個操作時發生錯誤"}
+    with PERM_LOCK:
+        HOOK_RECENT[key] = (time.time(), result)
+        HOOK_INFLIGHT.pop(key).set()
+    return result
+
+
+def _decide_tool(payload):
     """agy 的 PreToolUse 輸入 → hook 的回覆 {"decision", "reason"}。"""
     call = payload.get("toolCall") or {}
     tool, args = str(call.get("name") or ""), call.get("args") or {}
@@ -332,6 +381,17 @@ def decide_tool(payload):
         log_perm({"tool": tool, "command": command, "cid": cid, "level": "builtin", "decision": "auto_approve",
                   "note": "內建工具"})
         return {"decision": "auto_approve"}
+    # 讀 agy 工作區以外的檔案：agy 自己會拒絕，而且一拒絕整輪就中斷、沒有回答。
+    # 所以在這裡先拒絕並說明原因（模型收到原因會改用其他方法繼續）
+    if run and tool != "run_command":
+        allowed = [Path(run["cwd"]), UPLOADS, OUTPUT] + ([Path(run["work_dir"])] if work else [])
+        outside = [f for f in command_guard._path_args(args)
+                   if Path(f).is_absolute() and not command_guard._inside(f, [a.resolve() for a in allowed])]
+        if outside:
+            log_perm({"tool": tool, "command": outside[0], "cid": cid, "level": "outside", "decision": "deny",
+                      "note": "工作區以外的檔案"})
+            return {"decision": "deny", "reason": f"{outside[0]} 不在可以讀取的資料夾裡（agy 不允許）。"
+                                                  "不要再嘗試讀它；改用已經有的資訊，或請使用者把檔案加為附件，然後繼續回答。"}
     # 用 view_file 讀整本大 PDF：內容會一直留在對話裡，之後每一輪都變慢、變貴（課本 34 MB 實際發生過）
     if tool == "view_file":
         f = Path(str(args.get("AbsolutePath") or ""))
@@ -365,7 +425,7 @@ def decide_tool(payload):
         return {"decision": "allow"}
     if not work:
         return done("deny", "這是對話模式，不能執行終端機指令（內建的 lumina 工具除外）。請改用 view_file、lumina 讀取資料後直接回答；"
-                            "如果真的需要執行程式，請告訴使用者：把專案切換到「工作模式」並綁定資料夾後就可以。", "對話模式")
+                            "如果真的需要執行程式，請告訴使用者：切到左上角的「Code」區、加入工作資料夾後就可以。", "對話模式")
     if not run:
         return done("deny", "背景工作不能執行指令。", "背景工作")
     network = any("網路" in w for w in a["warnings"])
@@ -375,7 +435,8 @@ def decide_tool(payload):
         return done("auto_approve", note=f"這段對話允許 {a['program']}")
 
     rid, nonce = uuid.uuid4().hex[:12], uuid.uuid4().hex
-    req = {"event": threading.Event(), "nonce": nonce, "answer": None, "cid": cid}
+    req = {"event": threading.Event(), "nonce": nonce, "answer": None, "cid": cid, "started": time.time(),
+           "deadline": time.time() + PERM_WAIT}
     with PERM_LOCK:
         PENDING[rid] = req
     run["emit"]({"event": "permission", "id": rid, "nonce": nonce, "command": command, "cwd": base["cwd"],
@@ -383,7 +444,10 @@ def decide_tool(payload):
                  "warnings": a["warnings"], "key": a["key"], "program": a["program"],
                  "can_conv": bool(a["program"]) and not network,
                  "script": (a["script"] or "")[:6000], "script_path": a["script_path"], "wait": PERM_WAIT})
-    req["event"].wait(PERM_WAIT)
+    req["deadline"] = time.time() + PERM_WAIT
+    while not req["event"].wait(1):            # 使用者按「＋5 分鐘」會把 deadline 往後延
+        if time.time() > req["deadline"]:
+            break
     with PERM_LOCK:
         PENDING.pop(rid, None)
     ans = req["answer"] or {"choice": "timeout"}
@@ -550,6 +614,71 @@ def verify_pdf(cwd, model, result, request):
     return changed, note
 
 
+def tail_thinking(cid, emit, stop, thoughts):
+    """agy 的串流不含思考內容，但它會寫進 brain/<對話>/.system_generated/logs/transcript_full.jsonl 的 thinking 欄位。
+    回答進行中每秒讀一次新增的部分，送到畫面（思考過程，可以展開看）。"""
+    log = AGY_BRAIN / cid / ".system_generated" / "logs" / "transcript_full.jsonl"
+    seen = 0
+    try:                                       # 接著之前的對話：舊的思考不要再送一次
+        seen = sum(1 for _ in open(log, encoding="utf-8", errors="replace"))
+    except OSError:
+        pass
+    while True:
+        finished = "done" in stop
+        try:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            lines = []
+        for line in lines[seen:]:
+            try:
+                t = (json.loads(line).get("thinking") or "").strip()
+            except ValueError:
+                break                          # 寫到一半的行：下次再讀
+            seen += 1
+            if t:
+                thoughts.append(t)
+                emit({"event": "thinking", "text": t})
+        if finished:
+            return
+        time.sleep(1)
+
+
+CODE_CHECKS = {".cpp": ["g++", "-fsyntax-only", "-std=c++17"], ".cc": ["g++", "-fsyntax-only", "-std=c++17"],
+               ".c": ["gcc", "-fsyntax-only"], ".py": ["python", "-m", "py_compile"]}
+CODE_FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 你剛才寫的 {path} 編譯檢查失敗。
+請直接修正同一個檔案（用 replace_file_content 或 write_to_file），修正完只要回一句「已修正」。
+
+錯誤訊息：
+{error}
+"""
+
+
+def check_code(path):
+    """編譯檢查：通過回傳 ""，有錯回傳錯誤訊息，電腦上沒有編譯器回傳 None（就不檢查）。"""
+    import shutil as _sh
+    cmd = CODE_CHECKS[path.suffix.lower()]
+    if not _sh.which(cmd[0]):
+        return None
+    try:
+        r = subprocess.run(cmd + [str(path)], cwd=path.parent, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", creationflags=NO_WINDOW, timeout=120)
+    except Exception:
+        return None
+    return "" if r.returncode == 0 else (r.stderr or r.stdout or "編譯失敗").strip()[-2500:]
+
+
+def fix_code(cid, cwd, model, path, error, work_dir):
+    cmd = [agy_exe(), "-p", CODE_FIX_PROMPT.format(path=path, error=error), "--output-format", "json",
+           "--conversation", cid, "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--add-dir", work_dir,
+           "--mode", "accept-edits"] + (["--model", model] if model else [])
+    try:
+        subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=NO_WINDOW, timeout=600)
+    except Exception:
+        pass
+
+
 def error_summary(error):
     """錯誤訊息的第一行，給使用者看「剛剛為什麼重新產生」。"""
     first = next((l.strip() for l in error.splitlines() if l.strip().startswith("error")), error.strip().splitlines()[0] if error.strip() else "")
@@ -697,6 +826,9 @@ OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md
                "要產生 PDF 時，.typ 原始檔請存到 {dir}\\" + TYP_SRC + "\\ 資料夾（介面會把 PDF 編譯到 {dir}\\）。"
                "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
 
+WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。程式碼、專案檔案一律建立和修改在這個資料夾裡"
+             "（不是 output）；執行指令時把 Cwd 設成這個資料夾。寫完或改完程式後，一定要實際編譯或執行一次確認沒有錯誤"
+             "（例如 g++ 編譯、python 執行），有錯就修到通過，不要沒驗證就說完成。執行指令前使用者會看到授權卡，請簡短說明用途。")
 TOOLS_HINT = ("\n\n[內建工具：讀 PDF] 這個介面提供唯讀的 lumina 指令，用終端機執行、不需要使用者同意。"
               "先看對話前文、使用者的附件和專案記憶裡有沒有需要的內容（例如之前已經查過的題目原文和頁碼），有就直接用，不要重查；"
               "真的需要 PDF 裡的內容時才用它，而且只查需要的那幾頁（它是用來取代「整本讀進來」，不是每題都要翻一遍）。"
@@ -928,6 +1060,93 @@ def human_size(n):
 
 
 # ---------- 專案 ----------
+# ---------- Lumina Code：工作區（綁定一個資料夾），和對話區的「專案」完全分開 ----------
+CODE = DATA / "code"                 # code/<id>/workspace.json；這個資料夾也是 agy 的工作目錄（放 .agents 的 hooks 與 skills）
+CODE.mkdir(parents=True, exist_ok=True)
+LUMINA_MD = "LUMINA.md"
+LUMINA_MAX = 6000
+LUMINA_TEMPLATE = """# {name}
+
+## 這個專案在做什麼
+（一兩句說明）
+
+## 怎麼編譯、執行、測試
+（例如：g++ main.cpp -o main.exe，然後執行 .\\main.exe）
+
+## 慣例與注意事項
+- （命名、檔案放哪裡、使用者的偏好）
+"""
+LUMINA_HINT = ("\n\n[LUMINA.md：這個資料夾的專案說明] 以下是 {path} 的內容，由使用者和 AI 共同維護，"
+               "記錄這個專案的目的、編譯與執行方式、慣例。和使用者現在說的衝突時以使用者為準。\n"
+               "如果這次學到之後每次都需要知道的事（例如新的編譯方式、使用者明確要求的慣例），"
+               "請用 replace_file_content 簡短更新這個檔案（保持條列、精簡，不要寫這次的過程或程式碼）。\n\n{content}")
+
+
+def code_dir(wid):
+    return CODE / re.sub(r"[^0-9a-f]", "", wid or "")
+
+
+def load_ws(wid):
+    if not wid:
+        return None
+    try:
+        return json.loads((code_dir(wid) / "workspace.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def save_ws(ws):
+    d = code_dir(ws["id"])
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "workspace.json").write_text(json.dumps(ws, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def list_ws():
+    out = []
+    for f in CODE.glob("*/workspace.json"):
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    return sorted(out, key=lambda w: w.get("created") or 0)
+
+
+def ws_dir(ws):
+    """工作區綁定的資料夾還在就回傳路徑字串。"""
+    d = Path((ws or {}).get("work_dir") or "")
+    return str(d.resolve()) if d.is_absolute() and d.is_dir() else None
+
+
+def lumina_memory(ws):
+    """LUMINA.md 的內容（由 Lumina 自己放進新工作階段的開頭，不靠各模型各自找 GEMINI.md／CLAUDE.md，換模型也一樣）。"""
+    d = ws_dir(ws)
+    if not d:
+        return ""
+    try:
+        return (Path(d) / LUMINA_MD).read_text(encoding="utf-8", errors="replace").strip()[:LUMINA_MAX]
+    except OSError:
+        return ""
+
+
+def migrate_work_projects():
+    """v2.0.x 的「工作模式專案」改成 Code 區的工作資料夾；專案本身變回一般專案（對話紀錄留在專案裡）。"""
+    for f in PROJECTS.glob("*/project.json"):
+        try:
+            pr = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if pr.get("mode") != "work":
+            continue
+        wd = pr.get("work_dir") or ""
+        if wd and not check_work_dir(wd) and not any(w.get("work_dir") == str(Path(wd).resolve()) for w in list_ws()):
+            w = {"id": uuid.uuid4().hex[:12], "name": Path(wd).name or wd, "work_dir": str(Path(wd).resolve()),
+                 "created": time.time()}
+            save_ws(w)
+        pr.pop("mode", None)
+        pr.pop("work_dir", None)
+        f.write_text(json.dumps(pr, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def work_folder(pr):
     """專案是工作模式且綁定的資料夾還在：回傳路徑字串；否則 None（對話模式）。"""
     if not pr or pr.get("mode") != "work":
@@ -954,6 +1173,10 @@ def check_work_dir(path):
     if d == ROOT or ROOT in d.parents or d in ROOT.parents:
         return "不能選這個介面自己的資料夾"
     return ""
+
+
+TEXT_EXTS = {".cpp", ".c", ".h", ".hpp", ".cc", ".py", ".js", ".ts", ".java", ".cs", ".go", ".rs", ".md", ".txt", ".csv",
+             ".json", ".yaml", ".yml", ".toml", ".ini", ".typ", ".tex", ".bat", ".ps1", ".sh", ".log", ".m", ".r"}
 
 
 def proj_dir(pid):
@@ -1259,14 +1482,28 @@ def turn_tokens(cid, total):
     return total - prev if total >= prev else total
 
 
-def save_turn(cid, model, user_msg, reply, project=None):
+def save_turn(cid, model, user_msg, reply, project=None, code=None):
     with HIST_LOCK:
         h = load_hist(cid) or {"id": cid, "title": (user_msg["text"] or "（附件）")[:40],
-                               "created": time.time(), "messages": [], "project": project}
+                               "created": time.time(), "messages": [], "project": project, "code": code}
         h["model"] = model
         h["updated"] = time.time()
+        while h["messages"] and h["messages"][-1].get("pending"):   # 開頭先存的「回答中…」換成真正的這一輪
+            h["messages"].pop()
+            if h["messages"] and h["messages"][-1]["role"] == "user":
+                h["messages"].pop()
         h["messages"] += [user_msg, reply]
         write_hist(h)
+
+
+def save_pending(cid, user_msg, project, code=None):
+    """新對話一建立就先存一筆（使用者的訊息 + 回答中…），左側清單馬上看得到；回答完由 save_turn 換成真正的內容。"""
+    with HIST_LOCK:
+        if load_hist(cid):
+            return
+        write_hist({"id": cid, "title": (user_msg["text"] or "（附件）")[:40], "created": time.time(),
+                    "updated": time.time(), "project": project, "code": code,
+                    "messages": [user_msg, {"role": "assistant", "text": "（回答中…）", "pending": True}]})
 
 
 # ---------- 重問 / 編輯：從某則訊息之前分支出新的對話 ----------
@@ -1345,7 +1582,7 @@ def user_named(h):
 
 def save_fork(old, prior, new_cid, model, user_msg, reply):
     with HIST_LOCK:
-        h = {**{k: old.get(k) for k in ("title", "created", "project", "auto_titled")},
+        h = {**{k: old.get(k) for k in ("title", "created", "project", "code", "auto_titled")},
              "renamed": user_named(old),      # 舊版改過的名稱也在這裡補上紀錄，之後不會被自動標題覆蓋
              "id": new_cid, "model": model, "updated": time.time(), "messages": prior + [user_msg, reply]}
         write_hist(h)
@@ -1435,7 +1672,10 @@ class Handler(BaseHTTPRequestHandler):
         import mimetypes
         data = Path(path).read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", ctype or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+        ctype = ctype or mimetypes.guess_type(str(path))[0]
+        if not ctype and Path(path).suffix.lower() in TEXT_EXTS or ctype in ("text/x-c", "text/x-c++src", "text/x-python"):
+            ctype = "text/plain; charset=utf-8"           # 程式碼、文字檔：在分頁裡直接看，不要下載
+        self.send_header("Content-Type", ctype or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -1528,6 +1768,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"version": version.VERSION, "boot": BOOT_ID})
         if u.path == "/api/update/check":
             return self.send_json(updater.check(force=q.get("force", ["0"])[0] == "1"))
+        if u.path == "/api/code":                 # Lumina Code 的工作區清單
+            return self.send_json({"items": [{**w, "exists": bool(ws_dir(w)),
+                                              "has_memory": bool(lumina_memory(w))} for w in list_ws()]})
+        if u.path == "/api/code/memory":
+            w = load_ws(q.get("id", [""])[0])
+            if not w:
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json({"text": lumina_memory(w), "path": str(Path(ws_dir(w) or "") / LUMINA_MD),
+                                   "template": LUMINA_TEMPLATE.format(name=w["name"])})
         if u.path == "/api/permissions":          # 永遠允許的清單與最近的授權紀錄
             try:
                 log = [json.loads(l) for l in PERM_LOG.read_text(encoding="utf-8").splitlines()[-60:] if l.strip()]
@@ -1567,11 +1816,12 @@ class Handler(BaseHTTPRequestHandler):
                                    "transcripts": len(list(conv_dir.glob("*.md"))) if conv_dir.exists() else 0})
         if u.path == "/api/history":
             want = q.get("project", [""])[0]   # 空字串 = 不屬於任何專案的一般對話
+            code = q.get("code", [""])[0]      # 指定工作區：只列這個工作區的工作階段
             items = []
             for p in HISTORY.glob("*.json"):
                 try:
                     h = json.loads(p.read_text(encoding="utf-8"))
-                    if (h.get("project") or "") == want:
+                    if ((h.get("code") or "") == code) and (code or (h.get("project") or "") == want):
                         items.append({k: h.get(k) for k in ("id", "title", "model", "updated")})
                 except Exception:
                     pass
@@ -1615,8 +1865,43 @@ class Handler(BaseHTTPRequestHandler):
                 r = PENDING.get(str(d.get("id")))
                 if not r or d.get("nonce") != r["nonce"]:
                     return self.send_json({"ok": False}, 403)
+                if d.get("choice") == "extend":       # 延長等待，不算回答
+                    r["deadline"] = min(r["deadline"] + 300, r["started"] + PERM_MAX)
+                    return self.send_json({"ok": True, "left": int(r["deadline"] - time.time())})
                 r["answer"] = {"choice": d.get("choice"), "reason": d.get("reason", "")}
                 r["event"].set()
+            return self.send_json({"ok": True})
+        if u.path == "/api/code/create":          # 新增工作區：綁定一個資料夾
+            d = self.body()
+            err = check_work_dir(str(d.get("work_dir") or ""))
+            if err:
+                return self.send_json({"ok": False, "message": err})
+            wd = str(Path(d["work_dir"]).resolve())
+            same = next((w for w in list_ws() if w.get("work_dir") == wd), None)
+            if same:
+                return self.send_json({"ok": True, **same})
+            w = {"id": uuid.uuid4().hex[:12], "name": Path(wd).name or wd, "work_dir": wd, "created": time.time()}
+            save_ws(w)
+            sync_skills(code_dir(w["id"]))
+            return self.send_json({"ok": True, **w})
+        if u.path == "/api/code/delete":          # 移除工作區：資料夾本身不動，只刪掉 Lumina 裡的工作階段紀錄
+            w = load_ws(self.body().get("id"))
+            if w:
+                for f in HISTORY.glob("*.json"):
+                    try:
+                        if json.loads(f.read_text(encoding="utf-8")).get("code") == w["id"]:
+                            f.unlink()
+                    except (OSError, ValueError):
+                        pass
+                import shutil
+                shutil.rmtree(code_dir(w["id"]), ignore_errors=True)
+            return self.send_json({"ok": True})
+        if u.path == "/api/code/memory":          # 編輯 LUMINA.md（存在使用者的資料夾裡）
+            d = self.body()
+            w = load_ws(d.get("id"))
+            if not w or not ws_dir(w):
+                return self.send_json({"ok": False, "message": "找不到工作區的資料夾"})
+            (Path(ws_dir(w)) / LUMINA_MD).write_text(str(d.get("text") or "")[:LUMINA_MAX], encoding="utf-8")
             return self.send_json({"ok": True})
         if u.path == "/api/checkpoint/restore":   # 把資料夾還原成某一輪開始前的樣子
             try:
@@ -1875,7 +2160,8 @@ class Handler(BaseHTTPRequestHandler):
         model, cid = d.get("model"), d.get("conversation_id")
         # 舊分頁還選著已下架的模型：直接改用替代模型，不浪費時間重試；沒選模型就用預設，不要交給 agy 自己挑
         asked, model = model, replacement_model(model, available_ids()) or FALLBACK_MODEL
-        pr = load_project(d.get("project"))
+        ws = load_ws(d.get("code"))          # Lumina Code 的工作區（和專案互斥）
+        pr = None if ws else load_project(d.get("project"))
         # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
         fork, old, prior = d.get("fork"), None, []
         compacting = False
@@ -1883,14 +2169,16 @@ class Handler(BaseHTTPRequestHandler):
             cur = load_hist(cid)
             if cur and cur.get("compact") and cur.get("messages"):
                 old, prior, cid, compacting = cur, cur["messages"], None, True
-                pr = load_project(cur.get("project")) or pr
+                ws = load_ws(cur.get("code")) or ws
+                pr = None if ws else (load_project(cur.get("project")) or pr)
         if fork:
             old = load_hist(fork.get("from") or "")
             if old:
                 keep = max(0, min(int(fork.get("keep") or 0), len(old["messages"])))
                 prior = old["messages"][:keep - keep % 2]        # 保持「使用者／AI」成對
                 cid = None
-                pr = load_project(old.get("project"))
+                ws = load_ws(old.get("code"))
+                pr = None if ws else load_project(old.get("project"))
         is_new = not cid and not old
         instructions = None
         if not cid:   # 新對話：附上常駐指示（＋專案指示）
@@ -1900,16 +2188,21 @@ class Handler(BaseHTTPRequestHandler):
             if pr and pr.get("memory", "").strip():
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
+            mem = lumina_memory(ws) if ws else ""
+            if mem:
+                instructions += LUMINA_HINT.format(path=Path(ws_dir(ws)) / LUMINA_MD, content=mem)
             if prior:
                 instructions += "\n\n" + (compact_block(prior) if compacting or len(prior) > 12 else history_block(prior))
-        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=out_dir(pr)) + TOOLS_HINT
+        wd = ws_dir(ws) if ws else None
+        extra_hint = ((SEARCH_HINT if d.get("search") else "") + TOOLS_HINT
+                      + (WORK_HINT.format(dir=wd) if wd else OUTPUT_HINT.format(dir=out_dir(pr))))
         prompt = build_prompt(text + extra_hint, files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
         # agy 1.3.3 起讀工作區以外的檔案需要授權（非互動模式會直接拒絕），
         # 專案對話在專案資料夾裡跑，附件卻在 uploads：把 uploads 加進工作區
         # output：讓 AI 能把產生的檔案存進去。主目錄在 agy 的「信任工作區」裡，檔案修改預設要人工審查，
         # 非互動模式沒辦法審查就會被拒；accept-edits 只對工作區（cwd + --add-dir）內有效，主目錄其他地方照樣不能改
-        work_dir = work_folder(pr)              # 工作模式：模型可以修改這個資料夾、執行指令（每次詢問）
+        work_dir = wd                           # Lumina Code：模型可以修改這個資料夾、執行指令（每次詢問）
         cmd = [agy_exe(), "-p", prompt, "--output-format", "stream-json",
                "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
         if work_dir:
@@ -1922,7 +2215,8 @@ class Handler(BaseHTTPRequestHandler):
 
         run_id = uuid.uuid4().hex
         started = time.time()                       # 用來找出這輪 Nano Banana 新生成的圖片
-        cwd = proj_dir(pr["id"]) if pr else WORK   # 專案對話在專案資料夾裡跑，模型也能自己列出/搜尋檔案
+        # 專案對話在專案資料夾裡跑，模型也能自己列出/搜尋檔案；工作區在自己的內部資料夾跑（放 hooks，不弄髒使用者的資料夾）
+        cwd = code_dir(ws["id"]) if ws else (proj_dir(pr["id"]) if pr else WORK)
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -1930,7 +2224,19 @@ class Handler(BaseHTTPRequestHandler):
 
         emit_lock = threading.Lock()
 
+        timeline = []                  # 這輪的過程（思考、工具、授權），依發生順序存進對話紀錄
+
         def emit(obj):                 # 授權請求會從另一個執行緒送進來，所以要上鎖
+            ev = obj.get("event")
+            su = obj.get("step_update") or {}
+            if su.get("step_type") == "tool" and su.get("state") == "ACTIVE":
+                timeline.append({"k": "tool", "tool": su.get("tool_name"),
+                                 "params": (su.get("tool_info") or {}).get("parameters")})
+            elif ev == "thinking":
+                timeline.append({"k": "think", "text": obj.get("text")})
+            elif ev == "permission_done":
+                timeline.append({"k": "perm", "command": obj.get("command"), "decision": obj.get("decision"),
+                                 "note": obj.get("note")})
             with emit_lock:
                 try:
                     self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -1940,7 +2246,7 @@ class Handler(BaseHTTPRequestHandler):
 
         write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
         try:                           # 檢查點：記下模型這輪可以改到的資料夾，改壞了可以復原
-            snap = checkpoints.take([cwd, out_dir(pr)] + ([work_dir] if work_dir else []))
+            snap = checkpoints.take([work_dir] if work_dir else [cwd, out_dir(pr)])
         except Exception:
             snap = None
         if cid:
@@ -1978,6 +2284,7 @@ class Handler(BaseHTTPRequestHandler):
 
         reply, steps, new_cid, raw_other, denied = "", [], cid, [], []
         compact_next = False
+        think_stop, thoughts = [], []          # 思考過程：讀 agy 紀錄檔的執行緒何時停止、讀到的內容
         if proc is None:                        # 重試用完仍失敗：把 agy 的輸出當成錯誤訊息
             raw_other = [l for l in pre_output.splitlines() if l.strip()]
             lines = []
@@ -2001,6 +2308,14 @@ class Handler(BaseHTTPRequestHandler):
                 new_cid = ev.get("conversation_id") or new_cid
                 remember_run(new_cid)
                 ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir}
+                if is_new and new_cid:          # 新對話：馬上出現在左側清單，標題也先用問題產生
+                    save_pending(new_cid, {"role": "user", "text": text, "files": files, "t": started},
+                                 pr["id"] if pr else None, ws["id"] if ws else None)
+                    threading.Thread(target=auto_title, args=(new_cid, text, ""), daemon=True).start()
+                    emit({"event": "conv_created", "conversation_id": new_cid})
+                if not think_stop:              # 開始讀 agy 的紀錄檔，把思考過程即時送到畫面
+                    threading.Thread(target=tail_thinking, args=(new_cid, emit, think_stop, thoughts), daemon=True).start()
+                    think_stop.append(True)
             su = ev.get("step_update") or {}
             if su.get("step_type") == "agent_response" and su.get("text_delta"):
                 reply += su["text_delta"]
@@ -2022,12 +2337,13 @@ class Handler(BaseHTTPRequestHandler):
             returncode = proc.returncode
         with RUNS_LOCK:
             RUNS.pop(run_id, None)
+        think_stop.append("done")             # 停止讀思考過程
         STOPPED.discard(run_id)
         for k in [k for k, v in ACTIVE.items() if v["run_id"] == run_id]:
             ACTIVE.pop(k, None)
 
         # Nano Banana 生成的圖片：從 agy 的暫存搬到 output，直接接在回答後面顯示
-        images = collect_images(new_cid, started, out_dir(pr)) if new_cid else []
+        images = collect_images(new_cid, started, Path(work_dir) if work_dir else out_dir(pr)) if new_cid else []
         if images:
             # 路徑要編碼：「AI sandbox」這種有空格的路徑會讓 Markdown 的圖片語法斷掉
             shown = "\n\n".join(f"![{p.stem}](file:///{quote(p.as_posix(), safe=':/')})" for p in images)
@@ -2085,6 +2401,28 @@ class Handler(BaseHTTPRequestHandler):
         elif typs:
             emit({"event": "need_component", "id": "typst", "info": components.status()["typst"],
                   "files": [str(p) for p in typs]})
+        # 工作模式：改過的程式檔自動編譯檢查，有錯就在背景請模型修（最多 2 次），像 PDF 的編譯修正
+        if work_dir and snap and new_cid and returncode == 0:
+            try:
+                touched = [Path(c["path"]) for c in checkpoints.changes(snap) if c["kind"] != "deleted"]
+            except Exception:
+                touched = []
+            notes = []
+            for f in [p for p in touched if p.suffix.lower() in CODE_CHECKS and command_guard._inside(p, [Path(work_dir)])]:
+                for attempt in (0, 1, 2):
+                    err = check_code(f)
+                    if err is None or not err:
+                        if attempt:
+                            notes.append(f"> ⚙ {f.name} 第一次編譯有錯誤，已自動修正並重新檢查通過。")
+                        break
+                    if attempt == 2:
+                        notes.append(f"> ⚠ {f.name} 自動修正 2 次後仍無法編譯：{err.splitlines()[0][:150]}")
+                        break
+                    emit({"event": "code_fixing", "attempt": attempt + 1, "name": f.name})
+                    fix_code(new_cid, cwd, model, f, err, work_dir)
+            if notes:
+                reply = reply.rstrip() + "\n\n" + "\n".join(notes)
+                emit({"event": "pdf", "results": [], "reply": reply})
         # 檢查點：這輪改了哪些檔案（回答下方顯示，可以一鍵復原）
         cp = None
         if snap:
@@ -2102,12 +2440,14 @@ class Handler(BaseHTTPRequestHandler):
                 reply_msg["images"] = [str(p) for p in images]
             if cp:
                 reply_msg["checkpoint"] = cp
+            if timeline:
+                reply_msg["timeline"] = timeline[-200:]
             if old:
                 save_fork(old, prior, new_cid, model, user_msg, reply_msg)
                 if old["id"] != new_cid:
                     drop_brain(old["id"])          # 被取代的分支：agy 的暫存也清掉
             else:
-                save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None)
+                save_turn(new_cid, model, user_msg, reply_msg, pr["id"] if pr else None, ws["id"] if ws else None)
             if compact_next:                   # 對話已經很長：記下來，下一則訊息先壓縮前文
                 with HIST_LOCK:
                     h = load_hist(new_cid)
@@ -2116,12 +2456,18 @@ class Handler(BaseHTTPRequestHandler):
                         write_hist(h)
                 emit({"event": "compact_soon"})
             # 新對話，或重問／編輯第一則（使用者沒自己取過名稱時）：背景用 Flash 取標題
-            if reply and (is_new or (old and not prior and not user_named(old))):
+            if reply and not is_new and old and not prior and not user_named(old):   # 新對話的標題在開頭就產生了
                 threading.Thread(target=auto_title, args=(new_cid, text, reply), daemon=True).start()
             # 專案對話：背景整理記憶，不影響這次回覆
             if pr and pr.get("memory_auto", True) and reply and returncode == 0:
                 threading.Thread(target=update_memory, args=(pr["id"], turn_material(text, reply)),
                                  daemon=True).start()
+        elif is_new and new_cid:                # 新對話開頭先存了「回答中…」，結果沒有任何回答：換成失敗的提示
+            with HIST_LOCK:
+                h = load_hist(new_cid)
+                if h and h["messages"] and h["messages"][-1].get("pending"):
+                    h["messages"][-1] = {"role": "assistant", "text": FAILED_REPLY, "t": time.time()}
+                    write_hist(h)
         error = "\n".join(raw_other[-20:]) if returncode not in (0, None) else None
         if denied and not reply:          # 例如讀檔被拒：說清楚，而不是只顯示「沒有回覆」
             error = (f"agy 拒絕了需要授權的操作（{'、'.join(denied)}），所以沒有產生回答。"
@@ -2184,6 +2530,7 @@ def main():
     threading.Thread(target=tidy_output, daemon=True).start()
     threading.Thread(target=migrate_shortcut, daemon=True).start()
     install_lumina()
+    migrate_work_projects()
     threading.Thread(target=agy_self_update, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:

@@ -235,6 +235,43 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 body.notimes .mtime,body.notimes .convtime{display:none}
 .pmode label{display:block;font-size:13.5px;margin:4px 0}
 .pmode input[type=text]{width:100%;margin-top:4px}
+.think{margin:4px 0 8px;font-size:13px;color:var(--muted)}
+.think summary{cursor:pointer;user-select:none}
+.think .tbody{max-height:240px;overflow:auto;margin-top:6px;padding:8px 12px;border-left:2px solid var(--border);background:color-mix(in srgb,var(--panel) 60%,transparent);border-radius:0 8px 8px 0}
+.think .tstep{margin:0 0 8px}
+.think .tstep p{margin:0 0 4px}
+.act{margin:2px 0 8px;font-size:13px;color:var(--muted)}
+.act summary{cursor:pointer;user-select:none;list-style:none}
+.act summary::before{content:"▸ ";}
+.act[open] summary::before{content:"▾ ";}
+.actlist{max-height:300px;overflow:auto;margin-top:6px;padding:6px 10px;border-left:2px solid var(--border)}
+.arow{padding:3px 0;word-break:break-all}
+.arow.tool::before{content:"⚙ ";}
+.arow.think{font-style:italic;opacity:.85}
+.arow.think p{margin:0 0 4px}
+.arow.perm{color:var(--text)}
+#permDock{margin:0 auto 8px;max-width:var(--chatw,820px);border:1px solid color-mix(in srgb,var(--accent) 50%,var(--border));background:var(--panel);border-radius:12px;padding:10px 14px;font-size:13.5px}
+#permDock.strict{border-color:color-mix(in srgb,var(--danger) 60%,var(--border))}
+#permDock .ph{display:flex;align-items:center;gap:8px;font-weight:700}
+#permDock .warnchip{font-size:11.5px;font-weight:400;color:var(--danger);border:1px solid var(--danger);border-radius:6px;padding:0 6px}
+#permDock .pcode{background:var(--code);border-radius:8px;padding:6px 10px;margin:6px 0;font:12.5px/1.5 Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow:auto}
+#permDock .pwarn{color:var(--danger);margin:4px 0;padding-left:18px}
+#permDock .popts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px}
+#permDock kbd{font-size:11px;opacity:.7}
+#permDock button{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 12px;cursor:pointer}
+#permDock button:hover{border-color:var(--accent)}
+#permDock button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+#permDock .pmore{font-size:12px;padding:2px 8px;font-weight:400}
+#permDock .preason{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.empty-code{font-size:12px;color:var(--muted);padding:4px 12px 8px}
+#areaTabs{display:flex;gap:4px;margin:0 10px 8px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:10px}
+#areaTabs button{flex:1;padding:6px 0;border:0;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px}
+#areaTabs button.on{background:var(--bg);color:var(--text);font-weight:700}
+body:not(.area-code) .codeonly{display:none}
+body.area-code .chatonly{display:none}
+.wsgroup{margin-bottom:6px}
+.wshead span{font-weight:600}
+.wsitem{padding-left:26px !important;font-size:13px}
 .cpbox{font-size:12.5px;color:var(--muted);margin:6px 0}
 .cpbox summary{cursor:pointer;display:flex;align-items:center;gap:8px}
 .cpbox .cprestore{font-size:12px;padding:2px 8px}
@@ -344,11 +381,14 @@ body.resizing{cursor:col-resize;user-select:none}
 <div id="bgLayer" aria-hidden="true"></div>
 <aside id="side">
   <div id="brand"><img src="/icon.png" alt=""><b>Lumina</b><button class="vbadge" id="verBadge" title="檢查更新"></button><button id="collapseSide" title="收起側欄">«</button></div>
+  <div id="areaTabs"><button data-area="chat">💬 對話</button><button data-area="code">&lt;/&gt; Code</button></div>
   <div class="top"><button id="newBtn">＋ 新對話</button></div>
-  <div class="sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
-  <div id="projs"></div>
-  <div class="sect"><span id="histLabel">對話</span></div>
-  <div id="hist"></div>
+  <div class="chatonly sect"><span>專案</span><button id="newProj" title="新增專案">＋</button></div>
+  <div class="chatonly" id="projs"></div>
+  <div class="chatonly sect"><span id="histLabel">對話</span></div>
+  <div class="chatonly" id="hist"></div>
+  <div class="codeonly sect"><span>工作資料夾</span><button id="newCode" title="新增工作資料夾（AI 可以在裡面寫程式、執行指令）">＋</button></div>
+  <div class="codeonly" id="codeTree"></div>
   <div id="ver"><span id="verText"></span> · <a href="#" id="checkUpd">檢查更新</a> · <a href="#" id="verPrefs">⚙ 設定</a></div>
   <div id="sideResize" title="拖曳調整寬度（雙擊恢復預設）"></div>
 </aside>
@@ -374,6 +414,7 @@ body.resizing{cursor:col-resize;user-select:none}
     <nav id="outline" aria-label="問題索引"></nav>
   </div>
   <div id="comp">
+    <div id="permDock" hidden></div>
     <div id="box">
       <div id="chips"></div>
       <textarea id="input" rows="2" placeholder="問點什麼…（Enter 送出，Shift+Enter 換行）"></textarea>
@@ -386,6 +427,16 @@ body.resizing{cursor:col-resize;user-select:none}
     </div>
   </div>
 </main>
+<dialog id="lumdlg" class="tall">
+  <h3 style="margin-top:0">LUMINA.md：<span id="lumName"></span></h3>
+  <div class="dbody">
+    <p class="note">這個資料夾的專案說明：每個新的工作階段開頭都會放進去（不管用哪個模型都看得到同一份）。
+      寫專案在做什麼、怎麼編譯執行、慣例與注意事項；保持精簡。AI 發現長期有效的慣例時也會自己更新。
+      檔案位置：<code id="lumPath"></code></p>
+    <textarea id="lumText" style="height:320px;font-family:Consolas,monospace"></textarea>
+  </div>
+  <div class="dbtns"><button id="lumTpl">套用範本</button><span class="sp"></span><button id="lumClose">取消</button><button class="primary" id="lumSave">儲存</button></div>
+</dialog>
 <dialog id="pdlg" class="tall">
   <h3 style="margin-top:0">專案設定</h3>
   <div class="dbody">
@@ -393,13 +444,6 @@ body.resizing{cursor:col-resize;user-select:none}
   <input type="text" id="pname">
   <label class="f">專案指示（這個專案的新對話會自動附上，例如「這些是我們實驗室 transmon 相關論文」）</label>
   <textarea id="pinstr"></textarea>
-  <label class="f">模式</label>
-  <div class="pmode">
-    <label><input type="radio" name="pmode" value="chat"> 💬 對話模式：讀檔、讀 PDF、產生 PDF 與檔案（只寫到 output）；不能執行指令</label>
-    <label><input type="radio" name="pmode" value="work"> 🛠 工作模式：AI 可以修改下面這個資料夾、執行指令（每次跳出授權卡），每輪都有檢查點可以復原</label>
-    <input type="text" id="pworkdir" placeholder="工作資料夾的完整路徑，可以在檔案總管的網址列複製">
-    <p class="note">建議寫程式、整理檔案時才用工作模式；大改動建議換成 Claude Opus（Gemini 寫程式較弱）。</p>
-  </div>
   <label class="f">🧠 專案記憶（這個專案每個新對話開頭都會帶上）</label>
   <textarea id="pmem" hidden></textarea>
   <div id="pmemPreview" class="mempv" title="點一下展開查看／編輯"></div>
@@ -481,9 +525,9 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>顯示訊息時間與對話建立時間</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="show_times"><i></i></label></div>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
-      <div class="srow"><b>執行指令與工作模式</b></div>
+      <div class="srow"><b>執行指令與 Lumina Code</b></div>
       <p class="note">一般對話和專案預設是「💬 對話模式」：AI 只能讀檔、用內建工具讀 PDF、把檔案寫到 output，不能執行指令。
-        要讓 AI 改程式、執行指令，請在專案設定切換成「🛠 工作模式」並綁定資料夾：執行指令前會跳出授權卡，每輪都有檢查點可以復原。
+        要讓 AI 改程式、執行指令，請切到左上角的「要讓 AI 改程式、執行指令，請在專案設定切換成「🛠 工作模式」並綁定資料夾：lt;/&gt; Code」並加入工作資料夾：執行指令前會跳出授權卡，每輪都有檢查點可以復原。
         刪除資料夾、改系統設定、碰密碼與金鑰等操作一律擋下。<b>注意：允許 python、powershell 等於讓 AI 在你的電腦上做任何事</b>，請看過內容再允許。</p>
       <div id="permBox"></div>
       <div class="srow"><b>產生 PDF 後讓模型檢查成品</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="pdf_verify"><i></i></label></div>
@@ -551,7 +595,12 @@ const store = {
   set(k, v){ try{ localStorage.setItem(k, v); }catch{} }
 };
 
-let convId = null, running = null, pending = [];   // pending: [{path,name,url,isImg}]
+let convId = null, running = null, pending = [];
+// 每段對話各自的生成狀態：A 還在回答時可以切到 B 看或在 B 送出（key = 對話 id；新對話建立前用 draft-…）
+const RUNS = new Map();
+let viewDraft = "draft-" + Date.now();       // 目前畫面上「還沒有 id 的新對話」
+const viewKey = () => convId || viewDraft;
+const curRun = () => { const r = RUNS.get(viewKey()); return r && !r.done ? r : null; };   // pending: [{path,name,url,isImg}]
 
 /* ---------- markdown + LaTeX ---------- */
 function renderMd(src){
@@ -569,7 +618,7 @@ function renderMd(src){
   src = src.replace(/@@CODE(\d+)@@/g, (_, i) => codes[i]);
   // 本機圖片與檔案連結（Nano Banana 的圖、產生的 PDF）：在清理 HTML 前先換成伺服器網址（file: 會被 DOMPurify 拿掉）
   src = src.replace(/(!?)\[([^\]]*)\]\(file:\/\/\/([^)\s]+)\)/g, (_, bang, alt, p) =>
-    `${bang}[${alt}](/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g, "\\"))})`);
+    `${bang}[${alt}](/api/file?p=${encodeURIComponent(decodeURIComponent(p.replace(/#.*$/, "")).replace(/\//g, "\\"))})`);
   let html = DOMPurify.sanitize(marked.parse(src, {gfm:true, breaks:false}));
   html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
     const m = maths[i];
@@ -676,12 +725,12 @@ function addUser(text, files, t){
 function addAssistant(){
   clearEmpty();
   const d = document.createElement("div"); d.className = "msg assistant";
-  d.innerHTML = `<div class="steps"></div><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>
+  d.innerHTML = `<details class="act" open hidden><summary></summary><div class="actlist"></div></details><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>
     <div class="acts"><button class="retry" title="用同一個問題重新回答（這則回答會被取代）">↻ 重新回答</button></div>`;
   d.querySelector(".retry").onclick = () => retryLast(d);
   d.prepend(timeTag(0));
   $("#list").appendChild(d); scrollDown();
-  return { el:d, time:d.querySelector(".mtime"), steps:d.querySelector(".steps"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
+  return { el:d, time:d.querySelector(".mtime"), steps:d.querySelector(".actlist"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
 }
 
 /* ---------- 重問 / 編輯 ---------- */
@@ -689,7 +738,7 @@ const msgEls = () => [...document.querySelectorAll("#list > .msg")];
 // 「重新回答」只放在最後一則回答上；生成中全部隱藏
 function paintActions(){
   const all = msgEls(), lastA = all.filter(e => e.classList.contains("assistant")).pop();
-  document.body.classList.toggle("busy", !!running);
+  document.body.classList.toggle("busy", !!curRun());
   all.forEach(e => e.querySelector(".retry")?.toggleAttribute("hidden", e !== lastA));
 }
 function truncateFrom(el){            // 把 el 和它之後的訊息從畫面上拿掉，回傳 el 前面還有幾則
@@ -699,7 +748,7 @@ function truncateFrom(el){            // 把 el 和它之後的訊息從畫面�
   return k;
 }
 function retryLast(aEl){
-  if (running) return;
+  if (curRun()) return;
   const all = msgEls(), u = all[all.indexOf(aEl) - 1];
   if (!u || !u._msg) return;
   const {text, files} = u._msg;
@@ -707,7 +756,7 @@ function retryLast(aEl){
   runTurn(text, files, convId ? {from: convId, keep} : null);
 }
 function startEdit(uEl){
-  if (running || uEl.querySelector(".editor")) return;
+  if (curRun() || uEl.querySelector(".editor")) return;
   const all = msgEls(), later = all.length - all.indexOf(uEl) - 1;
   const b = uEl.querySelector(".bubble");
   const ed = document.createElement("div"); ed.className = "editor";
@@ -759,7 +808,7 @@ function stepLabel(s){
 
 /* ---------- sending ---------- */
 async function send(){
-  if (running) return stop();
+  if (curRun()) return stop();
   const text = $("#input").value.trim();
   if (!text && !pending.length) return;
   if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
@@ -777,11 +826,17 @@ async function runTurn(text, files, fork){
   const st = startStatus(a);
   const wasNew = !convId;
   let reply = "", lastRender = 0;
+  const run = {key: viewKey(), runId: null, uEl: a.el.previousElementSibling, aEl: a.el, done: false, text};
+  if (fork) run.key = "draft-" + Date.now(), viewDraft = run.key, convId = null;   // 重問／編輯會變成新的對話 id
+  RUNS.set(run.key, run);
+  const viewing = () => viewKey() === run.key;
+  const rekey = id => { if (!id || id === run.key) return; const was = viewing(); RUNS.delete(run.key); run.key = id; RUNS.set(id, run); if (was) convId = id; };
   setRunning(true);
   try {
     const res = await fetch("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({text, files, model:currentModel(),
-                            conversation_id: fork ? null : convId, fork, search:searchOn, project})});
+                            conversation_id: fork ? null : convId, fork, search:searchOn,
+                            project: area === "code" ? "" : project, code: area === "code" ? codeWs : ""})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -793,7 +848,8 @@ async function runTurn(text, files, fork){
         const line = buf.slice(0, i); buf = buf.slice(i+1);
         if (!line.trim()) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.event === "run") running = ev.run_id;
+        if (ev.event === "run") run.runId = ev.run_id;
+        if (ev.event === "conv_created"){ rekey(ev.conversation_id); loadHistory(); [5000, 12000].forEach(t => setTimeout(loadHistory, t)); }
         if (ev.event === "init") st.set("模型思考中");
         if (ev.event === "model_switched"){
           toast(`「${ev.from}」已被 Google 下架，這次改用 ${modelLabel(ev.to)} 回答`);
@@ -805,12 +861,11 @@ async function runTurn(text, files, fork){
           if (su.step_type === "agent_response" && su.text_delta){ reply += su.text_delta; st.hide(); }
           if (su.step_type === "tool" && su.state === "ACTIVE"){
             const label = stepLabel({tool:su.tool_name, params:(su.tool_info||{}).parameters});
-            const s = document.createElement("div"); s.textContent = label;
-            a.steps.appendChild(s);
+            actRow(a, "tool", label);
             st.set(su.tool_name === "search_web" ? "上網搜尋中" : su.tool_name === "view_file" ? "讀取檔案中" : "使用工具 " + su.tool_name);
           }
           if (su.step_type === "tool" && su.state === "DONE") st.set("模型思考中");
-          if (Date.now() - lastRender > 120){ a.bubble.innerHTML = renderMd(reply); lastRender = Date.now(); scrollDown(); }
+          if (Date.now() - lastRender > 120){ a.bubble.innerHTML = renderMd(reply); lastRender = Date.now(); if (viewing()) scrollDown(); }
         }
         if (ev.event === "result"){
           const r = ev.result || {};
@@ -822,6 +877,7 @@ async function runTurn(text, files, fork){
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
         if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "code_fixing"){ st.set(`${ev.name} 編譯有錯，自動修正中（第 ${ev.attempt} 次）`); }
         if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component"){
@@ -830,6 +886,7 @@ async function runTurn(text, files, fork){
         }
         if (ev.event === "permission") showPermissionCard(a, ev, st);
         if (ev.event === "checkpoint") showCheckpoint(a, ev);
+        if (ev.event === "thinking") addThought(a, ev.text);
         if (ev.event === "compacted" || ev.event === "compact_soon"){
           const n = document.createElement("div"); n.className = "permnote ok";
           n.textContent = ev.event === "compacted"
@@ -839,7 +896,7 @@ async function runTurn(text, files, fork){
         }
         if (ev.event === "permission_done") showPermissionNote(a, ev);
         if (ev.event === "done"){
-          if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
+          if (ev.conversation_id){ rekey(ev.conversation_id); loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
           if (ev.model_gone){ a.meta.textContent = ""; loadModels(true); }   // 模型被拿掉：重抓清單，自動改選可用的模型
         }
@@ -851,22 +908,27 @@ async function runTurn(text, files, fork){
   if (reply) a.bubble.innerHTML = renderMd(reply);
   else if (!a.bubble.innerHTML) a.bubble.innerHTML = `<div class="err">（已中止或沒有回覆）</div>`;
   a.bubble.classList.remove("typing");
-  st.end();
-  setRunning(false); scrollDown(); loadHistory();
+  st.end(); closeAct(a);
+  run.done = true; RUNS.delete(run.key);
+  if (!viewing()) toast(`✔ 「${(text || "附件").slice(0, 20)}」已經回答完成`);   // 在背景完成：提醒一下
+  setRunning(false); if (viewing()) scrollDown(); loadHistory();
   // 對話是消耗用量的主要來源：結束時馬上更新用量；Google 端統計有延遲，20 秒後再補抓一次
-  refreshUsage(); setTimeout(() => { if (!running) refreshUsage(); }, 20000);
+  refreshUsage(); setTimeout(() => { if (!RUNS.size) refreshUsage(); }, 20000);
   notifyDone(!!reply);
   if (needComp) showComponentCard(a, needComp);
   // PDF 編譯失敗的自動修正在伺服器背景進行（不會變成一則訊息），結果已經寫在回答最後
-  if (reply && !needComp) fetchSuggestion(text, reply);
+  if (reply && !needComp && viewing()) fetchSuggestion(text, reply);
   // 新對話的標題由 Flash 在背景產生，過一下再更新左側清單
   if (wasNew || (fork && fork.keep === 0)) [6000, 15000].forEach(t => setTimeout(loadHistory, t));
 }
 async function stop(){
-  if (running && running !== true) await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({run_id:running})});
+  const r = curRun();
+  if (r && r.runId) await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({run_id:r.runId})});
 }
-function setRunning(on){
-  running = on ? true : null;
+// 送出鈕、忙碌狀態都只看「目前畫面上這段對話」有沒有在生成
+function setRunning(){
+  const on = !!curRun();
+  running = RUNS.size ? true : null;
   const b = $("#send"); b.textContent = on ? "停止" : "送出"; b.classList.toggle("stop", on);
   paintActions();
 }
@@ -1098,7 +1160,8 @@ async function loadProjects(){
   const box = $("#projs"); box.innerHTML = "";
   box.appendChild(Object.assign(listItem("💬 一般對話", !project, []), {onclick: () => switchProject("")}));
   for (const p of projects){
-    const d = listItem("📁 " + p.name, p.id === project, [
+    const code = false, icon = "📁 ";
+    const d = listItem(icon + p.name, p.id === project, [
       ["⚙", "管理檔案與指示", () => { switchProject(p.id); openProjectDialog(); }],
       ["✎", "改名", () => inlineRename(d, p.name, v => post("/api/project/update", {id:p.id, name:v.replace(/^📁\s*/, "")}).then(loadProjects))],
       ["🗑", "刪除專案", async () => {
@@ -1107,8 +1170,9 @@ async function loadProjects(){
         if (p.id === project) switchProject(""); else loadProjects();
       }],
     ]);
-    d.querySelector("span").textContent = "📁 " + p.name;
-    const c = document.createElement("span"); c.className = "cnt"; c.textContent = p.file_count ? `${p.file_count} 檔` : "";
+    d.querySelector("span").textContent = icon + p.name;
+    if (code) d.title = p.work_dir || "";
+    const c = document.createElement("span"); c.className = "cnt"; c.textContent = !code && p.file_count ? `${p.file_count} 檔` : "";
     d.insertBefore(c, d.querySelector("button"));
     d.onclick = () => switchProject(p.id);
     d.ondblclick = () => inlineRename(d, p.name, v => post("/api/project/update", {id:p.id, name:v.replace(/^📁\s*/, "")}).then(loadProjects));
@@ -1118,12 +1182,84 @@ async function loadProjects(){
 }
 function paintProjectChip(){
   const p = curProject(), chip = $("#projChip");
-  chip.style.display = p ? "inline-block" : "none";
-  if (p) chip.textContent = `${p.mode === "work" ? "🛠" : "📁"} ${p.name} · ${p.file_count} 份檔案${p.mode === "work" ? " · 工作模式" : ""}`;
+  const w = area === "code" ? curWs() : null;
+  chip.style.display = (area === "code" ? w : p) ? "inline-block" : "none";
+  if (w) chip.textContent = `🛠 ${w.name} · LUMINA.md`;
+  else if (p) chip.textContent = `📁 ${p.name} · ${p.file_count} 份檔案`;
   $("#histLabel").textContent = p ? `「${p.name}」的對話` : "一般對話";
 }
+/* ---------- 兩個區域：💬 對話（專案）與 </> Lumina Code（工作資料夾，像 Claude Code） ---------- */
+let area = store.get("area", "chat") === "code" ? "code" : "chat";
+let codeWs = store.get("codeWs", ""), workspaces = [];
+const curWs = () => workspaces.find(w => w.id === codeWs) || null;
+function setArea(a, keepConv){
+  area = a; store.set("area", a);
+  document.body.classList.toggle("area-code", a === "code");
+  document.querySelectorAll("#areaTabs button").forEach(b => b.classList.toggle("on", b.dataset.area === a));
+  $("#newBtn").textContent = a === "code" ? "＋ 新的工作階段" : "＋ 新對話";
+  if (!keepConv) newConv();
+  paintProjectChip();
+  a === "code" ? loadCode() : loadHistory();
+}
+document.querySelectorAll("#areaTabs button").forEach(b => b.onclick = () => { if (b.dataset.area !== area) setArea(b.dataset.area); });
+async function loadCode(){
+  workspaces = (await (await fetch("/api/code")).json()).items;
+  if (codeWs && !curWs()) codeWs = "";
+  if (!codeWs && workspaces.length) codeWs = workspaces[workspaces.length - 1].id;
+  store.set("codeWs", codeWs);
+  const tree = $("#codeTree"); tree.innerHTML = "";
+  if (!workspaces.length) tree.innerHTML = `<div class="pfempty">按右邊的 ＋ 加入一個資料夾，讓 AI 在裡面寫程式</div>`;
+  for (const w of workspaces){
+    const g = document.createElement("div"); g.className = "wsgroup" + (w.id === codeWs ? " cur" : "");
+    const head = listItem("🛠 " + w.name, false, [
+      ["＋", "在這個資料夾開新的工作階段", () => { codeWs = w.id; store.set("codeWs", w.id); newConv(); loadCode(); }],
+      ["📝", "編輯 LUMINA.md", () => openLumina(w)],
+      ["🗑", "移除這個工作資料夾", async () => {
+        if (!confirm(`從 Lumina 移除「${w.name}」？\n\n資料夾本身和裡面的檔案都不會動，只會刪掉 Lumina 裡這個資料夾的工作階段紀錄。`)) return;
+        await post("/api/code/delete", {id:w.id}); if (w.id === codeWs) { codeWs = ""; newConv(); } loadCode();
+      }],
+    ]);
+    head.classList.add("wshead"); head.title = w.work_dir + (w.exists ? "" : "（找不到這個資料夾）");
+    head.onclick = () => { codeWs = w.id; store.set("codeWs", w.id); newConv(); loadCode(); };
+    g.appendChild(head);
+    const items = (await (await fetch("/api/history?code=" + w.id)).json()).items;
+    for (const it of items.slice(0, 30)){
+      const d = listItem(it.title || "（未命名）", it.id === convId, [
+        ["✎", "改名", () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}))],
+        ["🗑", "刪除", async () => { if (!confirm("刪除這個工作階段的紀錄？（資料夾裡的檔案不會動）")) return;
+          await post("/api/delete", {id:it.id}); if (it.id === convId) newConv(); else loadCode(); }],
+      ]);
+      d.classList.add("wsitem");
+      d.onclick = () => openConv(it.id);
+      g.appendChild(d);
+    }
+    tree.appendChild(g);
+  }
+  paintProjectChip();
+  if (!convId && $("#empty")){ $("#list").innerHTML = emptyState(); }   // 首頁用到工作資料夾的資訊：載入後重畫
+}
+$("#newCode").onclick = async () => {
+  const dir = (prompt("要讓 AI 工作的資料夾完整路徑（可以在檔案總管的網址列複製）：") || "").trim().replace(/^"|"$/g, "");
+  if (!dir) return;
+  const r = await post("/api/code/create", {work_dir:dir});
+  if (r.ok === false){ alert(r.message); return; }
+  codeWs = r.id; store.set("codeWs", r.id); newConv(); loadCode();
+};
+async function openLumina(w){
+  w = w || curWs(); if (!w) return;
+  const j = await (await fetch("/api/code/memory?id=" + w.id)).json();
+  $("#lumName").textContent = w.name; $("#lumPath").textContent = j.path;
+  $("#lumText").value = j.text || ""; $("#lumdlg")._tpl = j.template; $("#lumdlg")._id = w.id;
+  $("#lumdlg").showModal();
+}
+$("#lumTpl").onclick = () => { if (!$("#lumText").value.trim() || confirm("用範本取代目前的內容？")) $("#lumText").value = $("#lumdlg")._tpl; };
+$("#lumClose").onclick = () => $("#lumdlg").close();
+$("#lumSave").onclick = async () => {
+  const r = await post("/api/code/memory", {id:$("#lumdlg")._id, text:$("#lumText").value});
+  if (r.ok === false){ alert(r.message); return; }
+  $("#lumdlg").close(); toast("✔ 已儲存 LUMINA.md");
+};
 function switchProject(id, keepConv){
-  if (running) return;
   project = id || ""; store.set("project", project);
   if (!keepConv) newConv(); else loadHistory();
   loadProjects();
@@ -1140,9 +1276,6 @@ async function openProjectDialog(){
   const p = curProject(); if (!p) return;
   const full = await (await fetch("/api/projects/" + p.id)).json();
   $("#pname").value = full.name; $("#pinstr").value = full.instructions || "";
-  const mode = full.mode === "work" ? "work" : "chat";
-  document.querySelector(`input[name=pmode][value=${mode}]`).checked = true;
-  $("#pworkdir").value = full.work_dir || ""; $("#pworkdir").disabled = mode !== "work";
   paintMemory(full);
   paintProjectFiles(full.files);
   if (!$("#pdlg").open) $("#pdlg").showModal();
@@ -1182,14 +1315,9 @@ const pf = $("#pfiles");
 pf.addEventListener("dragleave", () => pf.classList.remove("drag"));
 pf.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); pf.classList.remove("drag"); if (e.dataTransfer?.files?.length) uploadProjectFiles(e.dataTransfer.files); });
 $("#pClose").onclick = () => $("#pdlg").close();
-document.querySelectorAll("input[name=pmode]").forEach(r => r.onchange = () => {
-  $("#pworkdir").disabled = r.value !== "work" || !r.checked; if (r.value === "work" && r.checked) $("#pworkdir").focus();
-});
 $("#pSave").onclick = async () => {
-  const mode = document.querySelector("input[name=pmode]:checked")?.value || "chat";
   const r = await post("/api/project/update", {id:project, name:$("#pname").value, instructions:$("#pinstr").value,
-                                               memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked,
-                                               mode, work_dir:$("#pworkdir").value.trim().replace(/^"|"$/g, "")});
+                                               memory:$("#pmem").value, memory_auto:$("#pmemAuto").checked});
   if (r.ok === false){ alert(r.message); return; }
   $("#pdlg").close(); loadProjects();
 };
@@ -1310,7 +1438,7 @@ $("#scNo").onclick = () => { $("#scdlg").close(); noMorePrompt(); };
 $("#sShortcut").onclick = () => createShortcut();
 $("#updLater").onclick = () => $("#updlg").close();
 $("#updGo").onclick = async () => {
-  if (running){ alert("還有回覆在生成中，等它完成再更新。"); return; }
+  if (RUNS.size){ alert("還有回覆在生成中，等它完成再更新。"); return; }
   const go = $("#updGo"); go.disabled = true; $("#updLater").disabled = true;
   go.textContent = "下載並安裝中…";
   const before = (await (await fetch("/api/version")).json()).boot;
@@ -1326,10 +1454,11 @@ $("#updGo").onclick = async () => {
   }
   alert("新版已經裝好，但伺服器沒有自動重新啟動。請雙擊「啟動.vbs」。");
 };
-$("#projChip").onclick = openProjectDialog;
+$("#projChip").onclick = () => area === "code" ? openLumina() : openProjectDialog();
 
 /* ---------- history ---------- */
 async function loadHistory(){
+  if (area === "code") return loadCode();
   const j = await (await fetch("/api/history?project=" + encodeURIComponent(project))).json();
   const h = $("#hist"); h.innerHTML = "";
   for (const it of j.items){
@@ -1348,26 +1477,49 @@ async function loadHistory(){
   if (!j.items.length) h.innerHTML = `<div class="pfempty">還沒有對話</div>`;
 }
 async function openConv(id){
-  if (running) return;
   const h = await (await fetch("/api/history/" + id)).json();
-  if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
+  if (h.code){ if (area !== "code" || codeWs !== h.code){ codeWs = h.code; store.set("codeWs", h.code); area = "code"; setArea("code", true); } }
+  else {
+    if (area !== "chat") setArea("chat", true);
+    if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
+  }
   convId = id; $("#list").innerHTML = ""; clearSuggestion();
   if (h.created) convHeader(h.created);
-  for (const m of h.messages){
+  const live = RUNS.get(id);
+  const msgs = live ? h.messages.filter((m, i, all) => !m.pending && !(all[i + 1] && all[i + 1].pending)) : h.messages;
+  for (const m of msgs){
     if (m.role === "user") addUser(m.text, m.files, m.t || 0);
     else {
       const a = addAssistant(); a.bubble.classList.remove("typing");
       if (m.t) a.time.textContent = fmtTime(m.t);
-      (m.steps || []).forEach(s => { const x = document.createElement("div"); x.textContent = stepLabel(s); a.steps.appendChild(x); });
+      if (m.timeline) m.timeline.forEach(t => t.k === "think" ? addThought(a, t.text)
+                                           : t.k === "perm" ? actRow(a, "perm", permLine(t)) : actRow(a, "tool", stepLabel(t)));
+      else {
+        (m.steps || []).forEach(t => actRow(a, "tool", stepLabel(t)));
+        (m.thinking || []).forEach(t => addThought(a, t));
+      }
+      closeAct(a);
       a.bubble.innerHTML = renderMd(m.text);
       if (m.checkpoint) showCheckpoint(a, m.checkpoint);
     }
   }
+  if (live && !live.done){ $("#list").append(live.uEl, live.aEl); scrollDown(true); }   // 還在生成：接回畫面
+  setRunning();
   if (h.model) setModel(h.model);
   paintActions();
   $("#side").classList.remove("open"); loadHistory();
 }
 function emptyState(){
+  if (area === "code"){
+    const w = curWs();
+    if (!w) return `<div id="empty"><h2>&lt;/&gt; Lumina Code</h2><div class="projcard">讓 AI 在你電腦上的資料夾裡寫程式、執行指令（每次都會先問你），每一輪都可以「↶ 復原」。<br>
+      按左邊「工作資料夾」旁的 ＋ 加入一個資料夾開始。</div></div>`;
+    return `<div id="empty"><h2>🛠 ${escapeHtml(w.name)}</h2>
+      <div class="projcard">AI 會在 <code>${escapeHtml(w.work_dir)}</code> 裡建立、修改檔案；執行指令前會在下方詢問你（可以按 1、2、3 選擇），
+        每一輪都有檢查點可以「↶ 復原」，改過的程式會自動編譯檢查。比較大的改動建議把模型換成 Claude Opus。<br>
+        ${w.has_memory ? "📝 已有 LUMINA.md，新的工作階段會帶上它。" : "📝 還沒有 LUMINA.md：寫下專案說明、怎麼編譯執行，AI 每次都會先看。"}
+        <button onclick="openLumina()">編輯 LUMINA.md</button></div></div>`;
+  }
   const p = curProject();
   if (!p) return homeHtml();
   return `<div id="empty"><h2>📁 ${escapeHtml(p.name)}</h2>
@@ -1414,8 +1566,7 @@ async function fillHome(){
   } catch {}
 }
 function newConv(){
-  if (running) return;
-  convId = null; clearSuggestion();
+  convId = null; viewDraft = "draft-" + Date.now(); clearSuggestion(); setRunning();
   // 設定裡的「新對話預設模型／聯網搜尋」
   if (savedPrefs.default_model && setModel(savedPrefs.default_model)) store.set("model", currentModel());
   if (savedPrefs.default_search !== undefined && !!savedPrefs.default_search !== searchOn) $("#searchBtn").click();
@@ -1626,55 +1777,97 @@ function showComponentCard(a, ev){
   scrollDown();
 }
 
-/* ---------- 指令授權卡：模型要執行指令時，由使用者決定 ---------- */
-const PERM_CHOICE = {once:"✔ 已允許這一次", conv:"✔ 這段對話都允許", always:"✔ 已設為永遠允許", deny:"✖ 已拒絕"};
+/* ---------- 時間軸：思考、工具、授權依發生順序排在同一個區塊（參考 Claude Code） ---------- */
+function actRow(a, kind, content, html){
+  const act = a.el.querySelector(".act"), list = act.querySelector(".actlist");
+  act.hidden = false;
+  const r = document.createElement("div"); r.className = "arow " + kind;
+  if (html) r.innerHTML = content; else r.textContent = content;
+  const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 30;
+  list.appendChild(r);
+  if (stick) list.scrollTop = list.scrollHeight;
+  paintActSummary(a);
+  return r;
+}
+function paintActSummary(a){
+  const act = a.el.querySelector(".act"), rows = act.querySelectorAll(".arow");
+  const n = k => act.querySelectorAll(".arow." + k).length;
+  const parts = [n("think") && `思考 ${n("think")}`, n("tool") && `工具 ${n("tool")}`, n("perm") && `授權 ${n("perm")}`].filter(Boolean);
+  act.querySelector("summary").textContent = `過程：${rows.length} 個步驟（${parts.join("、")}）`;
+}
+function closeAct(a){ const act = a.el.querySelector(".act"); if (act) act.open = false; }
+function addThought(a, text){ actRow(a, "think", renderMd(text), true); }
+const PERM_TEXT = {auto_approve:"✔ 允許", deny:"⛔ 拒絕"};
+const permLine = t => `⌨ ${String(t.command || "").slice(0, 160)}　${PERM_TEXT[t.decision] || t.decision}${t.note ? "（" + t.note + "）" : ""}`;
+// 沒經過詢問就決定的（安全規則擋下、永遠允許、對話模式）：時間軸留一行
+function showPermissionNote(a, ev){ if (!ev.asked) actRow(a, "perm", permLine(ev)); }
+
+// 授權詢問：出現在輸入框上方（像 Claude Code），可以按數字鍵選；決定後時間軸只留一行紀錄
+const PERM_CHOICE = {once:"允許一次", conv:"這段對話都允許", always:"永遠允許", deny:"拒絕", timeout:"沒有回應，已自動拒絕"};
+const permQueue = [];
 function showPermissionCard(a, ev, st){
-  const card = document.createElement("div");
-  card.className = "permcard cmdcard" + (ev.level === "strict" ? " strict" : "");
-  card.dataset.cmd = ev.command;
-  const warn = ev.warnings.length ? `<ul class="pwarn">${ev.warnings.map(w => `<li>⚠ ${escapeHtml(w)}</li>`).join("")}</ul>` : "";
-  const script = ev.script ? `<details><summary>要執行的腳本內容（${escapeHtml(baseName(ev.script_path || ""))}）</summary><pre class="pcode"></pre></details>` : "";
-  card.innerHTML = `<div class="ph">⌨ 模型想執行指令${ev.level === "strict" ? "（風險較高，請仔細看）" : ""}</div>
+  permQueue.push({a, ev, st});
+  if (permQueue.length === 1) openPermDock();
+}
+function openPermDock(){
+  const item = permQueue[0], dock = $("#permDock");
+  if (!item){ dock.hidden = true; dock.innerHTML = ""; return; }
+  const {a, ev, st} = item;
+  const opts = [["once", "允許這一次"]];
+  if (ev.can_conv) opts.push(["conv", `這段對話都允許「${ev.program}」`]);
+  if (ev.key) opts.push(["always", `永遠允許「${ev.key}」`]);
+  opts.push(["deny", "拒絕"]);
+  dock.hidden = false;
+  dock.className = ev.level === "strict" ? "strict" : "";
+  dock.innerHTML = `<div class="ph">⌨ 要執行這個指令嗎？${ev.level === "strict" ? "<span class=\"warnchip\">風險較高</span>" : ""}<span class="sp"></span><span class="meta pleft"></span><button class="pmore" title="還在想或查資料">＋5 分鐘</button></div>
     <pre class="pcode pcmd"></pre>
-    <div class="meta">位置：<span class="pcwd"></span></div>
-    ${ev.summary ? `<div class="meta">模型的說明（不一定準確）：<span class="psum"></span></div>` : ""}
-    ${warn}${script}
-    <input class="preason" placeholder="（拒絕時可以告訴模型原因，例如「不要用指令，直接讀 PDF」）">
-    <div class="pbtns">
-      <button class="primary" data-c="once">允許這一次</button>
-      ${ev.can_conv ? `<button data-c="conv">這段對話都允許「${escapeHtml(ev.program)}」</button>` : ""}
-      ${ev.key ? `<button data-c="always">永遠允許「${escapeHtml(ev.key)}」</button>` : ""}
-      <button class="deny" data-c="deny">拒絕</button>
-      <span class="sp"></span><span class="meta pleft"></span>
-    </div>`;
-  card.querySelector(".pcmd").textContent = ev.command;
-  card.querySelector(".pcwd").textContent = ev.cwd;
-  if (ev.summary) card.querySelector(".psum").textContent = ev.summary;
-  if (ev.script) card.querySelector("details .pcode").textContent = ev.script;
-  a.el.insertBefore(card, a.meta);
+    <div class="meta">位置：<span class="pcwd"></span>${ev.summary ? "　模型的說明（不一定準確）：<span class=\"psum\"></span>" : ""}</div>
+    ${ev.warnings.length ? `<ul class="pwarn">${ev.warnings.map(w => `<li>⚠ ${escapeHtml(w)}</li>`).join("")}</ul>` : ""}
+    ${ev.script ? `<details><summary>要執行的腳本內容</summary><pre class="pcode pscript"></pre></details>` : ""}
+    <div class="popts">${opts.map(([c, t], i) => `<button data-c="${c}"${c === "once" ? ' class="primary"' : ""}><kbd>${i + 1}</kbd> ${escapeHtml(t)}</button>`).join("")}</div>
+    <input class="preason" placeholder="拒絕時可以告訴模型原因（例如「不要用指令，直接讀 PDF」），按 Enter 送出拒絕">`;
+  dock.querySelector(".pcmd").textContent = ev.command;
+  dock.querySelector(".pcwd").textContent = ev.cwd;
+  if (ev.summary) dock.querySelector(".psum").textContent = ev.summary;
+  if (ev.script) dock.querySelector(".pscript").textContent = ev.script;
   st && st.set("等你決定要不要允許指令");
-  const t0 = Date.now(), left = card.querySelector(".pleft");
+  let deadline = Date.now() + ev.wait * 1000, closed = false;
+  const left = dock.querySelector(".pleft");
+  const extend = async () => {
+    const r = await post("/api/permission/answer", {id:ev.id, nonce:ev.nonce, choice:"extend"});
+    if (r.ok) deadline = Date.now() + r.left * 1000;
+  };
+  const finish = async (choice) => {
+    if (closed) return; closed = true;
+    clearInterval(timer); document.removeEventListener("keydown", keys, true);
+    const reason = dock.querySelector(".preason")?.value || "";
+    if (choice !== "timeout") await post("/api/permission/answer", {id:ev.id, nonce:ev.nonce, choice, reason});
+    actRow(a, "perm", `⌨ ${ev.command.slice(0, 160)}　${choice === "deny" || choice === "timeout" ? "⛔" : "✔"} ${PERM_CHOICE[choice]}${reason && choice === "deny" ? "：" + reason : ""}`);
+    st && st.set("模型思考中");
+    permQueue.shift(); openPermDock();
+  };
   const timer = setInterval(() => {
-    const s = Math.max(0, ev.wait - Math.floor((Date.now() - t0) / 1000));
-    left.textContent = `${s} 秒後自動拒絕`;
+    const s = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    left.textContent = s >= 120 ? `${Math.ceil(s / 60)} 分鐘後自動拒絕` : `${s} 秒後自動拒絕`;
     if (!s) finish("timeout");
   }, 1000);
-  function finish(choice){
-    clearInterval(timer);
-    card.classList.add("done");
-    card.querySelector(".pbtns").innerHTML = `<span class="meta">${choice === "timeout" ? "⏱ 沒有回應，已自動拒絕" : PERM_CHOICE[choice]}</span>`;
-    card.querySelector(".preason").remove();
-    st && st.set("模型思考中");
-  }
-  card.querySelectorAll(".pbtns button").forEach(b => b.onclick = async () => {
-    const choice = b.dataset.c;
-    finish(choice);
-    await post("/api/permission/answer", {id:ev.id, nonce:ev.nonce, choice, reason:card.querySelector(".preason")?.value || ""});
-  });
-  // 拒絕理由欄位按 Enter = 拒絕
-  card.querySelector(".preason").onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); card.querySelector('[data-c="deny"]').click(); } };
-  scrollDown();
+  // 數字鍵選擇（輸入框沒在打字時）；Esc = 拒絕
+  const keys = e => {
+    const t = e.target;
+    // 正在打字時不搶按鍵；輸入框是空的（游標平常停在那裡）就可以直接按數字選擇
+    if (t && t.matches && t.matches("textarea, input") && !(t.id === "input" && !t.value)) return;
+    const i = +e.key - 1;
+    if (opts[i]){ e.preventDefault(); finish(opts[i][0]); }
+    if (e.key === "Escape"){ e.preventDefault(); finish("deny"); }
+  };
+  document.addEventListener("keydown", keys, true);
+  dock.querySelectorAll(".popts button").forEach(b => b.onclick = () => finish(b.dataset.c));
+  dock.querySelector(".pmore").onclick = extend;
+  const reasonBox = dock.querySelector(".preason");
+  reasonBox.addEventListener("input", () => { if (deadline - Date.now() < 60000) extend(); });
+  reasonBox.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); finish("deny"); } };
 }
+
 // 檢查點：這輪改了哪些檔案，可以一鍵復原成這輪開始前的樣子
 function showCheckpoint(a, cp){
   const KIND = {added:"＋新增", modified:"✎修改", deleted:"－刪除"};
@@ -1695,15 +1888,6 @@ function showCheckpoint(a, cp){
   };
   a.el.insertBefore(box, a.meta);
 }
-// 沒跳卡片就決定的（被安全規則擋下、永遠允許、沒開啟執行指令）：在回答裡留一行紀錄
-function showPermissionNote(a, ev){
-  if (ev.asked) return;            // 已經有授權卡顯示結果
-  const n = document.createElement("div");
-  n.className = "permnote " + (ev.decision === "deny" ? "deny" : "ok");
-  n.textContent = (ev.decision === "deny" ? "⛔ 已擋下指令：" : "✔ 自動允許指令：") + ev.command.slice(0, 160) + (ev.note ? `（${ev.note}）` : "");
-  a.el.insertBefore(n, a.meta);
-}
-
 /* ---------- 預測回覆：回答完在空白輸入框顯示建議的下一句，按 Tab 採用 ---------- */
 let basePlaceholder = "問點什麼…（Enter 送出，Shift+Enter 換行）", suggestion = "", suggestToken = 0;
 function setSuggestion(t){
@@ -1717,7 +1901,7 @@ async function fetchSuggestion(q, a){
   try {
     const r = await post("/api/suggest", {q, a});
     // 期間使用者已經開始打字、送出或換了對話：就不顯示
-    if (r.ok && r.text && token === suggestToken && conv === convId && !running && !$("#input").value) setSuggestion(r.text);
+    if (r.ok && r.text && token === suggestToken && conv === convId && !curRun() && !$("#input").value) setSuggestion(r.text);
   } catch {}
 }
 function clearSuggestion(){ suggestToken++; setSuggestion(""); }
@@ -1938,7 +2122,7 @@ function checkQuota(reset){
 loadPrefs().then(() => { if (savedPrefs.update_check !== false) checkUpdate(false); else checkVersionOnly(); });
 loadModels(false, true).then(() => { refreshUsage(); loadModels(true); });
 loadProjects().then(() => { if (!convId && $("#empty")) { $("#list").innerHTML = emptyState(); fillHome(); } });
-loadHistory(); checkShortcut(); $("#input").focus();
+setArea(area, true); checkShortcut(); $("#input").focus();
 </script>
 </body>
 </html>

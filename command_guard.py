@@ -232,8 +232,12 @@ def assess(tool, args, roots):
             bump("strict", "git -c 可以臨時指定會執行指令的設定（例如 core.pager）", warn=True)
         if prog in RUNNERS:
             bump("strict", f"{prog} 會執行專案檔裡寫的指令（專案檔可能是模型寫的），等於執行任意程式", warn=True)
-        # cmd 會先找「目前資料夾」裡的同名程式：模型可以寫一個 git.bat 冒充 git
-        if prog and cwd:
+        # cmd 會先找「目前資料夾」裡的同名程式：模型可以寫一個 git.bat 冒充 git。
+        # 明確寫出路徑（.\程式.exe）是要執行自己的程式，不是冒充：改成每次詢問
+        first = (seg.strip().split() or [""])[0].strip("\"'&")
+        if prog and cwd and re.search(r"[\\/]", first):
+            bump("strict", f"執行工作資料夾裡的程式 {first}（可能是模型剛編譯出來的），請確認它要做什麼", warn=True)
+        elif prog and cwd:
             for ext in ("", ".bat", ".cmd", ".exe", ".com", ".ps1", ".vbs", ".js"):
                 if (Path(cwd) / f"{prog}{ext}").is_file():
                     bump("block", f"工作資料夾裡有同名的 {prog}{ext}，可能是冒充的程式")
