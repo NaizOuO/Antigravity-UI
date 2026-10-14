@@ -960,11 +960,13 @@ function setModel(id){
   $("#family").value = fam.key; fillEffort(fam, id); paintUsage();
   return true;
 }
-async function loadModels(refresh = true){
+// cached：先用上次存下的清單（馬上就能選），再在背景向 agy 重抓；agy 很少換模型，不必每次都等十幾秒
+async function loadModels(refresh = true, cached = false){
   const sel = $("#family");
   try {
     const saved = store.get("model", "gemini-3.8-flash-high");
-    const j = await (await fetch(`/api/models?refresh=${refresh ? 1 : 0}&want=${encodeURIComponent(saved)}`)).json();
+    const j = await (await fetch(`/api/models?refresh=${refresh ? 1 : 0}&cached=${cached ? 1 : 0}&want=${encodeURIComponent(saved)}`)).json();
+    if (!j.models.length && families.length) return;          // 背景重抓失敗：保留目前的清單，不要清掉
     $("#banner").hidden = !j.error; $("#banner").textContent = j.error ? "⚠ " + j.error : "";
     families = groupModels(j.models);
     sel.innerHTML = "";
@@ -1934,7 +1936,7 @@ function checkQuota(reset){
 }
 
 loadPrefs().then(() => { if (savedPrefs.update_check !== false) checkUpdate(false); else checkVersionOnly(); });
-loadModels().then(refreshUsage);
+loadModels(false, true).then(() => { refreshUsage(); loadModels(true); });
 loadProjects().then(() => { if (!convId && $("#empty")) { $("#list").innerHTML = emptyState(); fillHome(); } });
 loadHistory(); checkShortcut(); $("#input").focus();
 </script>

@@ -1110,14 +1110,16 @@ COMPRESS_PROMPT = """下面是專案「{name}」的記憶，目前 {length} 字�
 """
 
 
-def run_agy_text(prompt, name, model=None):
+def run_agy_text(prompt, name, model=None, retried=False):
     """用記憶模型跑一次 agy，回傳文字結果（失敗時丟出 RuntimeError）。"""
+    original = prompt
     if len(prompt) > MAX_ARG:      # 內容太長：存成檔案讓模型讀
         f = WORK / f"{name}.md"
         f.write_text(prompt, encoding="utf-8")
         prompt = f"請用 view_file 完整讀取這個檔案，並嚴格依照檔案裡的指示輸出：\n- {f}"
     cmd = [agy_exe(), "-p", prompt, "--output-format", "json"]
-    model = model or memory_model()
+    # 內容很長（存成檔案讓模型讀）時，Flash Low 常常讀完不回傳任何內容（重建記憶、壓縮對話都遇過），改用 Flash High
+    model = model or (FALLBACK_MODEL if len(prompt) < 400 and "view_file" in prompt else memory_model())
     if model:
         cmd += ["--model", model]
     try:
@@ -1130,6 +1132,16 @@ def run_agy_text(prompt, name, model=None):
     remember_run(r.get("conversation_id")); drop_brain(r.get("conversation_id"))
     text = (r.get("response") or "").strip()
     if r.get("status") != "SUCCESS" or not text:
+        try:                                    # 記下 agy 的完整回應，方便查原因
+            with open(DATA / "agy_fail.log", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "name": name, "model": model,
+                                    "status": r.get("status"), "usage": r.get("usage"),
+                                    "error": r.get("error"), "denied": r.get("denied_actions")},
+                                   ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        if model != FALLBACK_MODEL and not retried:   # 偶爾會讀完檔案卻沒有輸出：換 Flash High 再試一次
+            return run_agy_text(original, name, FALLBACK_MODEL, retried=True)
         raise RuntimeError("模型沒有回傳內容")
     return text
 
@@ -1492,6 +1504,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/models":
             if not agy_installed():
                 return self.send_json({"models": [], "error": AGY_MISSING})
+            if q.get("cached", ["0"])[0] == "1" and last_models():   # 開頁面先用上次的清單，不用等 agy
+                return self.send_json({"models": last_models(), "replace": "", "error": None})
             stale = None
             try:
                 models = list_models(refresh=q.get("refresh", ["0"])[0] == "1")
