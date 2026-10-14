@@ -222,6 +222,19 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 .permcard{border:1px solid color-mix(in srgb,var(--accent) 45%,var(--border));background:color-mix(in srgb,var(--panel) 92%,transparent);border-radius:12px;padding:12px 16px;margin:8px 0;max-width:620px}
 .permcard .ph{font-weight:700;margin-bottom:4px}
 .permcard .ph.muted{color:var(--muted)}
+.cmdcard.strict{border-color:color-mix(in srgb,var(--danger) 55%,var(--border))}
+.cmdcard .pcode{background:var(--code);border-radius:8px;padding:8px 10px;margin:6px 0;font:12.5px/1.5 Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
+.cmdcard .pwarn{color:var(--danger)}
+.cmdcard details{margin:4px 0;font-size:13px}
+.cmdcard .preason{width:100%;margin:6px 0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.cmdcard .pbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cmdcard.done{opacity:.75}
+.permnote{font-size:12.5px;margin:4px 0;color:var(--muted);word-break:break-all}
+.permnote.deny{color:var(--danger)}
+.prule{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0}
+.prule code{flex:1}
+.plog{max-height:220px;overflow:auto;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:6px 8px}
+.plog div{padding:2px 0;word-break:break-all}
 .permcard p{margin:4px 0}
 .permcard ul{margin:6px 0 10px;padding-left:20px;font-size:13.5px;color:var(--muted)}
 .pbtns{display:flex;gap:8px}
@@ -450,6 +463,11 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">回答完會在空白的輸入框顯示灰色的建議，按 Tab 就填進去；直接打字就會忽略。用 Gemini Flash 預測，額度很少。</p>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
+      <div class="srow"><b>允許模型執行指令（每次詢問）</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="allow_commands" id="allowCmd"><i></i></label></div>
+      <p class="note">開啟後，模型想執行指令（例如用 python 讀 PDF、計算數值）時會跳出授權卡，你看過指令再決定：允許一次、這段對話都允許、永遠允許（只限 dir、git status 這類唯讀指令）或拒絕。
+        刪除資料夾、改系統設定、碰密碼與金鑰、修改 agy 或這個介面的設定等操作會直接擋下。
+        <b>注意：允許 python、powershell 等於讓模型在你的電腦上做任何事</b>，Windows 沒有沙盒可以隔離，請看過內容再允許。關閉時模型不能執行任何指令。</p>
+      <div id="permBox"></div>
       <div class="srow"><b>產生 PDF 後讓模型檢查成品</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="pdf_verify"><i></i></label></div>
       <p class="note">PDF 編譯好後，把每一頁轉成圖片讓模型「看成品」：檢查頁數是否符合要求、版面有沒有跑掉、公式（例如括號位置）與內容有沒有錯，有問題就自動修正再重新產生。模型只看原始碼時常看不出這些問題。會多花一點時間與額度。</p>
     </section>
@@ -769,6 +787,8 @@ async function runTurn(text, files, fork){
         if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component") needComp = ev;
+        if (ev.event === "permission") showPermissionCard(a, ev, st);
+        if (ev.event === "permission_done") showPermissionNote(a, ev);
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
@@ -1551,6 +1571,64 @@ function showComponentCard(a, ev){
   scrollDown();
 }
 
+/* ---------- 指令授權卡：模型要執行指令時，由使用者決定 ---------- */
+const PERM_CHOICE = {once:"✔ 已允許這一次", conv:"✔ 這段對話都允許", always:"✔ 已設為永遠允許", deny:"✖ 已拒絕"};
+function showPermissionCard(a, ev, st){
+  const card = document.createElement("div");
+  card.className = "permcard cmdcard" + (ev.level === "strict" ? " strict" : "");
+  card.dataset.cmd = ev.command;
+  const warn = ev.warnings.length ? `<ul class="pwarn">${ev.warnings.map(w => `<li>⚠ ${escapeHtml(w)}</li>`).join("")}</ul>` : "";
+  const script = ev.script ? `<details><summary>要執行的腳本內容（${escapeHtml(baseName(ev.script_path || ""))}）</summary><pre class="pcode"></pre></details>` : "";
+  card.innerHTML = `<div class="ph">⌨ 模型想執行指令${ev.level === "strict" ? "（風險較高，請仔細看）" : ""}</div>
+    <pre class="pcode pcmd"></pre>
+    <div class="meta">位置：<span class="pcwd"></span></div>
+    ${ev.summary ? `<div class="meta">模型的說明（不一定準確）：<span class="psum"></span></div>` : ""}
+    ${warn}${script}
+    <input class="preason" placeholder="（拒絕時可以告訴模型原因，例如「不要用指令，直接讀 PDF」）">
+    <div class="pbtns">
+      <button class="primary" data-c="once">允許這一次</button>
+      ${ev.can_conv ? `<button data-c="conv">這段對話都允許「${escapeHtml(ev.program)}」</button>` : ""}
+      ${ev.key ? `<button data-c="always">永遠允許「${escapeHtml(ev.key)}」</button>` : ""}
+      <button class="deny" data-c="deny">拒絕</button>
+      <span class="sp"></span><span class="meta pleft"></span>
+    </div>`;
+  card.querySelector(".pcmd").textContent = ev.command;
+  card.querySelector(".pcwd").textContent = ev.cwd;
+  if (ev.summary) card.querySelector(".psum").textContent = ev.summary;
+  if (ev.script) card.querySelector("details .pcode").textContent = ev.script;
+  a.el.insertBefore(card, a.meta);
+  st && st.set("等你決定要不要允許指令");
+  const t0 = Date.now(), left = card.querySelector(".pleft");
+  const timer = setInterval(() => {
+    const s = Math.max(0, ev.wait - Math.floor((Date.now() - t0) / 1000));
+    left.textContent = `${s} 秒後自動拒絕`;
+    if (!s) finish("timeout");
+  }, 1000);
+  function finish(choice){
+    clearInterval(timer);
+    card.classList.add("done");
+    card.querySelector(".pbtns").innerHTML = `<span class="meta">${choice === "timeout" ? "⏱ 沒有回應，已自動拒絕" : PERM_CHOICE[choice]}</span>`;
+    card.querySelector(".preason").remove();
+    st && st.set("模型思考中");
+  }
+  card.querySelectorAll(".pbtns button").forEach(b => b.onclick = async () => {
+    const choice = b.dataset.c;
+    finish(choice);
+    await post("/api/permission/answer", {id:ev.id, nonce:ev.nonce, choice, reason:card.querySelector(".preason")?.value || ""});
+  });
+  // 拒絕理由欄位按 Enter = 拒絕
+  card.querySelector(".preason").onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); card.querySelector('[data-c="deny"]').click(); } };
+  scrollDown();
+}
+// 沒跳卡片就決定的（被安全規則擋下、永遠允許、沒開啟執行指令）：在回答裡留一行紀錄
+function showPermissionNote(a, ev){
+  if (ev.asked) return;            // 已經有授權卡顯示結果
+  const n = document.createElement("div");
+  n.className = "permnote " + (ev.decision === "deny" ? "deny" : "ok");
+  n.textContent = (ev.decision === "deny" ? "⛔ 已擋下指令：" : "✔ 自動允許指令：") + ev.command.slice(0, 160) + (ev.note ? `（${ev.note}）` : "");
+  a.el.insertBefore(n, a.meta);
+}
+
 /* ---------- 預測回覆：回答完在空白輸入框顯示建議的下一句，按 Tab 採用 ---------- */
 let basePlaceholder = "問點什麼…（Enter 送出，Shift+Enter 換行）", suggestion = "", suggestToken = 0;
 function setSuggestion(t){
@@ -1630,9 +1708,35 @@ async function paintBgList(){
     list.appendChild(row);
   }
 }
+// 設定 → 永遠允許的指令（可以刪除）與最近的授權紀錄
+async function paintPerms(){
+  let p; try { p = await (await fetch("/api/permissions")).json(); } catch { return; }
+  const box = $("#permBox"); box.innerHTML = "";
+  if (p.always.length){
+    box.insertAdjacentHTML("beforeend", `<p class="note">永遠允許的指令：</p>`);
+    for (const k of p.always){
+      const row = document.createElement("div"); row.className = "prule";
+      row.innerHTML = `<code></code><button>移除</button>`;
+      row.querySelector("code").textContent = k;
+      row.querySelector("button").onclick = async () => { await post("/api/permissions", {remove:k}); paintPerms(); };
+      box.appendChild(row);
+    }
+  }
+  if (p.log.length){
+    const label = {auto_approve:"✔ 允許", deny:"⛔ 拒絕"};
+    const d = document.createElement("details");
+    d.innerHTML = `<summary class="note">最近的指令紀錄（${p.log.length}）</summary><div class="plog"></div>`;
+    for (const e of p.log){
+      const r = document.createElement("div");
+      r.textContent = `${new Date(e.t * 1000).toLocaleString("zh-TW", {hour12:false})}　${label[e.decision] || e.decision}　${e.command || e.tool}${e.note ? "（" + e.note + "）" : ""}`;
+      d.querySelector(".plog").appendChild(r);
+    }
+    box.appendChild(d);
+  }
+}
 async function openPrefs(section){
   await loadPrefs(); fillDefaultModel(); paintPrefs(); await paintBgList();
-  checkUpdate(false); loadAgyStat(); paintComponents();
+  checkUpdate(false); loadAgyStat(); paintComponents(); paintPerms();
   $("#sdlg").showModal();
   if (section) [...document.querySelectorAll("#sbody section")].find(s => s.dataset.title === section)?.scrollIntoView();
 }

@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import command_guard
 import components
 import updater
 import version
@@ -78,7 +79,8 @@ DEFAULT_SETTINGS = {
     # 用量
     "quota_warn": 15,             # 目前模型的額度剩下低於幾 % 時提醒（0 = 不提醒）
     # 更新
-    "update_check": True,         # 開啟時檢查新版本
+    "allow_commands": False,       # 允許模型執行指令（每次跳出授權卡詢問；危險的指令一律擋下）
+    "update_check": True,        # 開啟時檢查新版本
 }
 # ---------- agy 的暫存（~/.gemini/antigravity-cli/brain/<對話 id>/） ----------
 # agy 每段對話都會在 brain 裡留一個資料夾（對話紀錄、讀過的 PDF 副本、生成的圖片），不會自己清。
@@ -221,6 +223,137 @@ def sync_skills(target):
         if skill.is_dir():
             shutil.rmtree(dest / skill.name, ignore_errors=True)
             shutil.copytree(skill, dest / skill.name)
+    write_hooks(target)
+
+
+# ---------- 工具授權：agy 執行任何工具前會呼叫 hook，由伺服器判斷、必要時在介面詢問使用者 ----------
+PERMS_FILE = SETTING_DIR / "permissions.json"        # {"always": ["git status", "dir", ...]}
+PERM_LOG = DATA / "permission_log.jsonl"
+PERM_WAIT = 170                                       # 等使用者回應的秒數（hook 本身的上限設 200 秒）
+ACTIVE = {}          # conversation id -> {"emit", "cwd", "run_id"}：正在介面上串流的對話
+CONV_ALLOW = {}      # conversation id -> {程式名稱}：「這段對話都允許」
+PENDING = {}         # 授權請求 id -> {"event", "nonce", "answer", "cid"}
+PERM_LOCK = threading.Lock()
+
+
+def hook_command():
+    # agy 用 cmd 執行 hook，而且會把引號跳脫成 \"，所以整行不能有引號：
+    # 用 Windows 內建的 curl（路徑沒有空格）把 agy 給的 JSON 原封不動轉給伺服器，伺服器回傳決定
+    curl = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "curl.exe"
+    return (f"{curl} -s -m {PERM_WAIT + 20} -X POST -H Content-Type:application/json --data-binary @- "
+            f"http://{HOST}:{PORT}/api/permission/hook")
+
+
+def write_hooks(target):
+    """在 agy 的工作資料夾寫入 hooks.json（每次對話前都重寫，被改掉也會還原）。"""
+    d = Path(target) / ".agents"
+    d.mkdir(parents=True, exist_ok=True)
+    cfg = {"antigravity-ui-guard": {"PreToolUse": [
+        {"matcher": "*", "hooks": [{"type": "command", "command": hook_command(), "timeout": PERM_WAIT + 30}]}]}}
+    text = json.dumps(cfg, ensure_ascii=False, indent=1)
+    p = d / "hooks.json"
+    try:
+        if not p.exists() or p.read_text(encoding="utf-8") != text:
+            p.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_perms():
+    try:
+        data = json.loads(PERMS_FILE.read_text(encoding="utf-8"))
+        return {"always": [k for k in data.get("always", []) if isinstance(k, str)]}
+    except (OSError, ValueError):
+        return {"always": []}
+
+
+def save_perms(p):
+    PERMS_FILE.write_text(json.dumps(p, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def log_perm(entry):
+    try:
+        with open(PERM_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.time(), **entry}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def decide_tool(payload):
+    """agy 的 PreToolUse 輸入 → hook 的回覆 {"decision", "reason"}。"""
+    call = payload.get("toolCall") or {}
+    tool, args = str(call.get("name") or ""), call.get("args") or {}
+    cid = str(payload.get("conversationId") or "")
+    run = ACTIVE.get(cid)
+    roots = [WORK, OUTPUT, UPLOADS] + ([Path(run["cwd"])] if run else [])
+    a = command_guard.assess(tool, args, roots)
+    command = str(args.get("CommandLine") or "")
+    base = {"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
+
+    def done(decision, reason="", note="", asked=False):
+        log_perm({**base, "decision": decision, "note": note or reason})
+        if run and tool == "run_command":
+            run["emit"]({"event": "permission_done", "command": command, "decision": decision,
+                         "note": note or reason, "asked": asked})
+        return {"decision": decision, **({"reason": reason} if reason else {})}
+
+    if a["level"] == "pass":
+        return {"decision": "allow"}
+    if a["level"] == "block":
+        why = "；".join(a["reasons"])
+        return done("deny", f"這個操作被介面的安全規則擋下（{why}），不能執行。請改用其他方法，或直接回答使用者。", why)
+    if tool != "run_command":
+        return {"decision": "allow"}
+    if not load_settings().get("allow_commands"):
+        return done("deny", "使用者沒有開啟「允許執行指令」，不能用終端機。請改用 view_file 等工具讀取檔案，然後直接回答。",
+                    "沒有開啟允許執行指令")
+    if not run:
+        return done("deny", "背景工作不能執行指令。", "背景工作")
+    network = any("網路" in w for w in a["warnings"])
+    if a["level"] == "ask" and a["key"] and a["key"] in load_perms()["always"]:
+        return done("auto_approve", note=f"永遠允許：{a['key']}")
+    if a["program"] in CONV_ALLOW.get(cid, set()) and not network:
+        return done("auto_approve", note=f"這段對話允許 {a['program']}")
+
+    rid, nonce = uuid.uuid4().hex[:12], uuid.uuid4().hex
+    req = {"event": threading.Event(), "nonce": nonce, "answer": None, "cid": cid}
+    with PERM_LOCK:
+        PENDING[rid] = req
+    run["emit"]({"event": "permission", "id": rid, "nonce": nonce, "command": command, "cwd": base["cwd"],
+                 "summary": str(args.get("toolSummary") or args.get("toolAction") or ""), "level": a["level"],
+                 "warnings": a["warnings"], "key": a["key"], "program": a["program"],
+                 "can_conv": bool(a["program"]) and not network,
+                 "script": (a["script"] or "")[:6000], "script_path": a["script_path"], "wait": PERM_WAIT})
+    req["event"].wait(PERM_WAIT)
+    with PERM_LOCK:
+        PENDING.pop(rid, None)
+    ans = req["answer"] or {"choice": "timeout"}
+    choice = ans.get("choice")
+    if choice == "once":
+        return done("auto_approve", asked=True, note="允許一次")
+    if choice == "conv" and a["program"] and not network:
+        CONV_ALLOW.setdefault(cid, set()).add(a["program"])
+        return done("auto_approve", asked=True, note=f"這段對話都允許 {a['program']}")
+    if choice == "always" and a["key"]:
+        p = load_perms()
+        if a["key"] not in p["always"]:
+            p["always"].append(a["key"])
+            save_perms(p)
+        return done("auto_approve", asked=True, note=f"永遠允許：{a['key']}")
+    if choice == "timeout":
+        return done("deny", "使用者沒有在時間內允許這個指令。請不要再執行指令，改用其他方法或直接回答。", "逾時未回應", asked=True)
+    reason = str(ans.get("reason") or "").strip()[:500]
+    return done("deny", "使用者拒絕執行這個指令。" + (f"使用者說：{reason}" if reason else "請改用其他方法或直接回答。"),
+                "拒絕" + (f"：{reason}" if reason else ""), asked=True)
+
+
+def deny_pending(cid):
+    """使用者按停止：還在等授權的請求一律拒絕。"""
+    with PERM_LOCK:
+        for r in PENDING.values():
+            if r["cid"] == cid:
+                r["answer"] = {"choice": "deny", "reason": "使用者停止了這次回答"}
+                r["event"].set()
 
 
 def sync_all_skills():
@@ -735,7 +868,9 @@ def project_block(proj, cid=None):
                  "請依照問題判斷需要哪些檔案，用 view_file 讀取相關的檔案即可，不需要每次全部讀；"
                  "已經讀過且內容還記得的不必重讀。回答時請註明引用的檔名與頁碼。")
     conv_dir = proj_dir(proj["id"]) / "conversations"
-    others = [p for p in conv_dir.glob("*.md") if p.stem != (cid or "")] if conv_dir.exists() else []
+    # 只列出對話還在的副本（對話紀錄被刪掉、但副本還留著時，不要再當成過去的對話給模型看）
+    others = [p for p in conv_dir.glob("*.md") if p.stem != (cid or "") and hist_path(p.stem).exists()] \
+        if conv_dir.exists() else []
     if others:
         others.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         shown = others[:TRANSCRIPT_LIST_MAX]
@@ -1198,6 +1333,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"version": version.VERSION, "boot": BOOT_ID})
         if u.path == "/api/update/check":
             return self.send_json(updater.check(force=q.get("force", ["0"])[0] == "1"))
+        if u.path == "/api/permissions":          # 永遠允許的清單與最近的授權紀錄
+            try:
+                log = [json.loads(l) for l in PERM_LOG.read_text(encoding="utf-8").splitlines()[-60:] if l.strip()]
+            except (OSError, ValueError):
+                log = []
+            return self.send_json({**load_perms(), "log": log[::-1]})
         if u.path == "/api/usage":
             if q.get("cached", ["0"])[0] == "1":     # 開頁面先顯示上次的數值，不用等 agy
                 try:
@@ -1267,9 +1408,33 @@ class Handler(BaseHTTPRequestHandler):
             dest = day / f"{uuid.uuid4().hex[:6]}_{safe_name(d.get('name', 'file'))}"
             dest.write_bytes(base64.b64decode(d["data"].split(",", 1)[-1]))
             return self.send_json({"path": str(dest), "name": d.get("name")})
+        if u.path == "/api/permission/hook":      # agy 的 hook（透過 curl）送來的工具呼叫
+            try:
+                payload = self.body()
+            except ValueError:
+                return self.send_json({"decision": "deny", "reason": "無法讀取工具呼叫"})
+            return self.send_json(decide_tool(payload))
+        if u.path == "/api/permission/answer":    # 介面上的授權卡：要帶事件裡的一次性 nonce（模型的指令拿不到）
+            d = self.body()
+            with PERM_LOCK:
+                r = PENDING.get(str(d.get("id")))
+                if not r or d.get("nonce") != r["nonce"]:
+                    return self.send_json({"ok": False}, 403)
+                r["answer"] = {"choice": d.get("choice"), "reason": d.get("reason", "")}
+                r["event"].set()
+            return self.send_json({"ok": True})
+        if u.path == "/api/permissions":          # 管理「永遠允許」（只能刪除；新增只能從授權卡）
+            d, p = self.body(), load_perms()
+            if d.get("remove") in p["always"]:
+                p["always"].remove(d["remove"])
+                save_perms(p)
+            return self.send_json(p)
         if u.path == "/api/stop":
             rid = self.body().get("run_id")
             STOPPED.add(rid)
+            for k, v in list(ACTIVE.items()):
+                if v["run_id"] == rid:
+                    deny_pending(k)
             with RUNS_LOCK:
                 p = RUNS.get(rid)
             if p and p.poll() is None:
@@ -1545,13 +1710,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
-        def emit(obj):
-            try:
-                self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-                self.wfile.flush()
-            except OSError:
-                pass
+        emit_lock = threading.Lock()
 
+        def emit(obj):                 # 授權請求會從另一個執行緒送進來，所以要上鎖
+            with emit_lock:
+                try:
+                    self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+                except OSError:
+                    pass
+
+        write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
+        if cid:
+            ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
         emit({"event": "run", "run_id": run_id})
         if asked and model != asked:
             emit({"event": "model_switched", "from": asked, "to": model})
@@ -1603,6 +1774,7 @@ class Handler(BaseHTTPRequestHandler):
             if ev.get("event") == "init":
                 new_cid = ev.get("conversation_id") or new_cid
                 remember_run(new_cid)
+                ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
             su = ev.get("step_update") or {}
             if su.get("step_type") == "agent_response" and su.get("text_delta"):
                 reply += su["text_delta"]
@@ -1624,6 +1796,8 @@ class Handler(BaseHTTPRequestHandler):
         with RUNS_LOCK:
             RUNS.pop(run_id, None)
         STOPPED.discard(run_id)
+        for k in [k for k, v in ACTIVE.items() if v["run_id"] == run_id]:
+            ACTIVE.pop(k, None)
 
         # Nano Banana 生成的圖片：從 agy 的暫存搬到 output，直接接在回答後面顯示
         images = collect_images(new_cid, started, out_dir(pr)) if new_cid else []
