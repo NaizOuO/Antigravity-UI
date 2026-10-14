@@ -22,17 +22,17 @@ import version
 
 APP_DIR = Path(__file__).resolve().parent
 
-REPO = "NaizOuO/Antigravity-UI"
+REPO = "NaizOuO/Lumina"          # v2.0.0 起改名；舊名稱的網址 GitHub 會自動轉過來
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
-ASSET_PREFIX = "Antigravity-UI-"
+ASSET_PREFIXES = ("Lumina-", "Antigravity-UI-")    # 過渡期兩種檔名都認得
 MANIFEST = "manifest.json"          # 這一版的程式檔清單（release.py 產生）
 PROTECTED = ("data", "output", "setting", "components", "update", ".git")   # 這些資料夾裡的東西更新時絕對不動
 CHECK_TTL = 5 * 60                  # 檢查結果快取 5 分鐘（重新整理頁面就會再檢查；GitHub 未登入每小時限 60 次）
 
 
 def _get_json(url, timeout=10):
-    req = urllib.request.Request(url, headers={"User-Agent": "Antigravity-UI", "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Lumina", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -79,7 +79,7 @@ def check(force=False):
         data = _get_json(LATEST_URL)
         tag = str(data.get("tag_name", ""))
         asset = next((a for a in data.get("assets", [])
-                      if str(a.get("name", "")).startswith(ASSET_PREFIX) and a["name"].endswith(".zip")), None)
+                      if str(a.get("name", "")).startswith(ASSET_PREFIXES) and a["name"].endswith(".zip")), None)
         digest = str((asset or {}).get("digest") or "")
         result.update(
             latest=tag.lstrip("vV"),
@@ -96,8 +96,50 @@ def check(force=False):
     return result
 
 
+RAW_BASE = "https://raw.githubusercontent.com/{repo}/v{ver}/{path}"
+
+
+def _fetch(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "Lumina"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _download_delta(info, target):
+    """只下載有變動的檔案：比對新版 manifest.json 的檢查碼，變動的檔案從 raw.githubusercontent.com 逐一下載
+    （Release 附件的伺服器在台灣常常很慢），沒變的直接用本機的檔案，組成一個和完整版一樣的 zip 交給 apply()。
+    任何一個檔案下載失敗或檢查碼不符就丟出例外，由 download() 改下載完整 zip。"""
+    from urllib.parse import quote
+    ver = str(info.get("latest") or "")
+    raw = lambda path: RAW_BASE.format(repo=REPO, ver=ver, path=quote(path))
+    new = json.loads(_fetch(raw(MANIFEST)))
+    if str(new.get("version")) != ver:
+        raise RuntimeError("清單版本不符")
+    changed = 0
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel, digest in new["files"].items():
+            if not _safe(rel):
+                raise RuntimeError(f"不安全的路徑：{rel}")
+            local = APP_DIR / rel
+            if local.is_file() and file_sha256(local) == digest:
+                data = local.read_bytes()
+            else:
+                data = _fetch(raw(rel))
+                if hashlib.sha256(data).hexdigest() != digest:
+                    raise RuntimeError(f"{rel} 的檢查碼不符")
+                changed += 1
+            zf.writestr(rel, data)
+        zf.writestr(MANIFEST, json.dumps(new, ensure_ascii=False, indent=1))
+    return changed
+
+
 def download(info, target):
-    req = urllib.request.Request(info["url"], headers={"User-Agent": "Antigravity-UI"})
+    try:
+        _download_delta(info, target)          # 先試只下載變動的檔案（通常只有幾十 KB）
+        return target
+    except Exception:
+        Path(target).unlink(missing_ok=True)   # 改下載完整版
+    req = urllib.request.Request(info["url"], headers={"User-Agent": "Lumina"})
     h = hashlib.sha256()
     with urllib.request.urlopen(req, timeout=60) as r, open(target, "wb") as out:
         for chunk in iter(lambda: r.read(1 << 16), b""):

@@ -1,9 +1,9 @@
 {
- "version": "1.7.0",
+ "version": "1.8.0",
  "files": {
   "server.py": "70970742669488dd0e3f4fd760b200e45a45979727409c9cc31b206af8d684b1",
-  "version.py": "635aca6883adae690379c5a37d9ba74e47553a1bb1c3883d20481b152c613eb2",
-  "updater.py": "042a2a30cb1cfebde1f893de483a5e2d66d622771d95ae7b7f594b360ad0f5c3",
+  "version.py": "239e6092d375728ac03b45d432e240b41c5ee69a9d7064b9e3fdc3b1ed5c2682",
+  "updater.py": "2e99a0189125fb610c24566d020535217db3a54c7e7228ba663136052ee708c4",
   "components.py": "28c741f74ce6d3172dbc77eabf9e2522dae1787f44e49ae18524b301409df8d4",
   "command_guard.py": "5ccd49ff94cf1b0d5f266bee5bddef434faccf54daa505a940037706a57c14e4",
   "checkpoints.py": "c206ce3d3b57a1c0223dd2d7709d6ec21505585c2792ae40d3408a5c9538f986",
