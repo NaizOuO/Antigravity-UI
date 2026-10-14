@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import checkpoints
 import command_guard
 import components
 import updater
@@ -1423,6 +1424,13 @@ class Handler(BaseHTTPRequestHandler):
                 r["answer"] = {"choice": d.get("choice"), "reason": d.get("reason", "")}
                 r["event"].set()
             return self.send_json({"ok": True})
+        if u.path == "/api/checkpoint/restore":   # 把資料夾還原成某一輪開始前的樣子
+            try:
+                restored, moved = checkpoints.restore(str(self.body().get("id") or ""))
+            except Exception as e:
+                return self.send_json({"ok": False, "message": f"復原失敗：{e}"})
+            return self.send_json({"ok": True, "message": f"已復原 {restored} 個檔案，"
+                                   f"移走 {moved} 個這輪新增的檔案（放在 data\\checkpoints\\trash）"})
         if u.path == "/api/permissions":          # 管理「永遠允許」（只能刪除；新增只能從授權卡）
             d, p = self.body(), load_perms()
             if d.get("remove") in p["always"]:
@@ -1721,6 +1729,10 @@ class Handler(BaseHTTPRequestHandler):
                     pass
 
         write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
+        try:                           # 檢查點：記下模型這輪可以改到的資料夾，改壞了可以復原
+            snap = checkpoints.take([cwd, out_dir(pr)])
+        except Exception:
+            snap = None
         if cid:
             ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id}
         emit({"event": "run", "run_id": run_id})
@@ -1858,11 +1870,23 @@ class Handler(BaseHTTPRequestHandler):
         elif typs:
             emit({"event": "need_component", "id": "typst", "info": components.status()["typst"],
                   "files": [str(p) for p in typs]})
+        # 檢查點：這輪改了哪些檔案（回答下方顯示，可以一鍵復原）
+        cp = None
+        if snap:
+            try:
+                ch = checkpoints.changes(snap)
+                if ch:
+                    cp = {"id": snap, "count": len(ch), "changes": ch[:60]}
+                    emit({"event": "checkpoint", **cp})
+            except Exception:
+                pass
         if new_cid and (reply or steps or old):
             user_msg = {"role": "user", "text": text, "files": files}
             reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps}
             if images:
                 reply_msg["images"] = [str(p) for p in images]
+            if cp:
+                reply_msg["checkpoint"] = cp
             if old:
                 save_fork(old, prior, new_cid, model, user_msg, reply_msg)
                 if old["id"] != new_cid:

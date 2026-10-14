@@ -229,6 +229,10 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 .cmdcard .preason{width:100%;margin:6px 0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .cmdcard .pbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .cmdcard.done{opacity:.75}
+.cpbox{font-size:12.5px;color:var(--muted);margin:6px 0}
+.cpbox summary{cursor:pointer;display:flex;align-items:center;gap:8px}
+.cpbox .cprestore{font-size:12px;padding:2px 8px}
+.cplist{max-height:180px;overflow:auto;padding:4px 0 0 18px;word-break:break-all}
 .permnote{font-size:12.5px;margin:4px 0;color:var(--muted);word-break:break-all}
 .permnote.deny{color:var(--danger)}
 .prule{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0}
@@ -788,6 +792,7 @@ async function runTurn(text, files, fork){
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component") needComp = ev;
         if (ev.event === "permission") showPermissionCard(a, ev, st);
+        if (ev.event === "checkpoint") showCheckpoint(a, ev);
         if (ev.event === "permission_done") showPermissionNote(a, ev);
         if (ev.event === "done"){
           if (ev.conversation_id){ convId = ev.conversation_id; loadHistory(); }
@@ -1299,6 +1304,7 @@ async function openConv(id){
       const a = addAssistant(); a.bubble.classList.remove("typing");
       (m.steps || []).forEach(s => { const x = document.createElement("div"); x.textContent = stepLabel(s); a.steps.appendChild(x); });
       a.bubble.innerHTML = renderMd(m.text);
+      if (m.checkpoint) showCheckpoint(a, m.checkpoint);
     }
   }
   if (h.model) setModel(h.model);
@@ -1619,6 +1625,26 @@ function showPermissionCard(a, ev, st){
   // 拒絕理由欄位按 Enter = 拒絕
   card.querySelector(".preason").onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); card.querySelector('[data-c="deny"]').click(); } };
   scrollDown();
+}
+// 檢查點：這輪改了哪些檔案，可以一鍵復原成這輪開始前的樣子
+function showCheckpoint(a, cp){
+  const KIND = {added:"＋新增", modified:"✎修改", deleted:"－刪除"};
+  const box = document.createElement("details"); box.className = "cpbox";
+  box.innerHTML = `<summary>📌 這輪改動了 ${cp.count} 個檔案 <button class="cprestore">↶ 復原這輪的修改</button></summary><div class="cplist"></div>`;
+  for (const c of cp.changes){
+    const r = document.createElement("div");
+    r.textContent = `${KIND[c.kind] || c.kind}　${c.path}`;
+    box.querySelector(".cplist").appendChild(r);
+  }
+  if (cp.count > cp.changes.length) box.querySelector(".cplist").insertAdjacentHTML("beforeend", `<div>……還有 ${cp.count - cp.changes.length} 個</div>`);
+  box.querySelector(".cprestore").onclick = async e => {
+    e.preventDefault();
+    if (!confirm(`把這 ${cp.count} 個檔案還原成這輪開始前的樣子？\n這輪新增的檔案會移到 data\\checkpoints\\trash（不會刪除）。\n注意：之後幾輪對同一批檔案的修改也會一起被蓋掉。`)) return;
+    const r = await post("/api/checkpoint/restore", {id:cp.id});
+    toast(r.message);
+    if (r.ok) e.target.replaceWith(Object.assign(document.createElement("span"), {className:"meta", textContent:"✔ 已復原"}));
+  };
+  a.el.insertBefore(box, a.meta);
 }
 // 沒跳卡片就決定的（被安全規則擋下、永遠允許、沒開啟執行指令）：在回答裡留一行紀錄
 function showPermissionNote(a, ev){

@@ -1,12 +1,13 @@
 {
- "version": "1.5.0",
+ "version": "1.5.1",
  "files": {
-  "server.py": "9f3805253c0dd463f41313f9e8c0f4a3686f64d88d0dcaefdf4d1f316cf95bca",
-  "version.py": "346e0449fd9cd951cdeed4bdabb659be287afef0dc3fc02b8c83b0db8836ea03",
+  "server.py": "130ad3adc0f83fc5b294055ce2fe2717b6408b54cdcf5ed3625ad0693cb872c7",
+  "version.py": "6ec460f72cbe853146abc1171d1e1e2780a25f743d8fd8b49d383b9740984087",
   "updater.py": "042a2a30cb1cfebde1f893de483a5e2d66d622771d95ae7b7f594b360ad0f5c3",
   "components.py": "17c40959014468ec61b68508074520a032c6306235f1a0a93e215b39b6c2662e",
   "command_guard.py": "b0cd700fefdbece8ae61616076a862440c0dc65d15d672643dc16cb1aba66978",
-  "static/index.html": "c53bde573405d8e2e92f11dbc17de38d9ff962a366f5df3bf1e83266e39b3717",
+  "checkpoints.py": "c206ce3d3b57a1c0223dd2d7709d6ec21505585c2792ae40d3408a5c9538f986",
+  "static/index.html": "55e47f7bc991c1795b3cb8a282a2ff1443391ce69040437a8ca403d9dff7f657",
   "skills/pdf-document/SKILL.md": "98d94282a6505d2e3cae49d27a91fabd626978bf6318c21ff704666829450032",
   "skills/pdf-document/references/packages.md": "8cfcc31a24311ce8d2d0a5156582d47850e79b930e4af2119cf08ad7f156ab55",
   "skills/pdf-document/references/notes.typ": "131425f0434d34b48a7f1491518f991b54491b350ebc93e1acc03bcd8971739f",
