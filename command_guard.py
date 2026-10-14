@@ -124,7 +124,9 @@ def _inside(path, roots):
 def _path_args(args):
     out = []
     for k, v in (args or {}).items():
-        if isinstance(v, str) and (re.search(r"path|file|dir|target|cwd", k, re.I) or re.match(r"^[a-z]:[\\/]", v, re.I)):
+        # 只看「像路徑」的值：TargetContent、CodeContent 這類欄位裝的是檔案內容，不是路徑
+        if (isinstance(v, str) and "\n" not in v and len(v) < 1000 and not re.search(r"content|text|code|instruction", k, re.I)
+                and (re.search(r"path|file|dir|target|cwd", k, re.I) or re.match(r"^[a-z]:[\\/]", v, re.I))):
             out.append(v)
     return out
 

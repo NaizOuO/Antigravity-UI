@@ -229,6 +229,10 @@ dialog.big[open]{display:flex;flex-direction:column;width:min(920px,94vw);height
 .cmdcard .preason{width:100%;margin:6px 0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
 .cmdcard .pbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .cmdcard.done{opacity:.75}
+.mtime{font-size:11.5px;color:var(--muted);margin:0 4px 2px}
+.msg.user .mtime{text-align:right}
+.convtime{text-align:center;font-size:12px;color:var(--muted);margin:6px 0 14px}
+body.notimes .mtime,body.notimes .convtime{display:none}
 .cpbox{font-size:12.5px;color:var(--muted);margin:6px 0}
 .cpbox summary{cursor:pointer;display:flex;align-items:center;gap:8px}
 .cpbox .cprestore{font-size:12px;padding:2px 8px}
@@ -465,6 +469,7 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">只在你切到其他視窗或分頁時提醒（例如等 Pro 長推導時去看講義）。</p>
       <div class="srow"><b>預測我的下一句（Tab 採用）</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="suggest_reply"><i></i></label></div>
       <p class="note">回答完會在空白的輸入框顯示灰色的建議，按 Tab 就填進去；直接打字就會忽略。用 Gemini Flash 預測，額度很少。</p>
+      <div class="srow"><b>顯示訊息時間與對話建立時間</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="show_times"><i></i></label></div>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
       <div class="srow"><b>允許模型執行指令（每次詢問）</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="allow_commands" id="allowCmd"><i></i></label></div>
@@ -632,7 +637,21 @@ function fillUserBubble(b, text, files){
     else { const t = document.createElement("a"); t.className = "filetag"; t.href = fileUrl(f); t.target = "_blank"; t.textContent = "📄 " + baseName(f); b.appendChild(t); }
   }
 }
-function addUser(text, files){
+// 訊息時間（設定可以關閉）：今天只顯示時分，其他天加上日期
+function fmtTime(t){
+  const d = new Date(t * 1000), now = new Date();
+  const hm = d.toLocaleTimeString("zh-TW", {hour:"2-digit", minute:"2-digit", hour12:false});
+  return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+function timeTag(t){
+  const s = document.createElement("div"); s.className = "mtime"; s.textContent = t ? fmtTime(t) : ""; return s;
+}
+function convHeader(created){
+  const d = document.createElement("div"); d.className = "convtime";
+  d.textContent = "對話建立於 " + new Date(created * 1000).toLocaleString("zh-TW", {year:"numeric", month:"numeric", day:"numeric", weekday:"short", hour:"2-digit", minute:"2-digit", hour12:false});
+  $("#list").prepend(d);
+}
+function addUser(text, files, t){
   clearEmpty();
   const d = document.createElement("div"); d.className = "msg user";
   d._msg = {text, files: files || []};
@@ -641,7 +660,7 @@ function addUser(text, files){
   const acts = document.createElement("div"); acts.className = "acts";
   acts.innerHTML = `<button title="修改這則訊息後重新送出">✎ 編輯</button>`;
   acts.querySelector("button").onclick = () => startEdit(d);
-  d.append(b, acts); $("#list").appendChild(d); scrollDown(true); rebuildOutline();
+  d.append(timeTag(t === undefined ? Date.now() / 1000 : t), b, acts); $("#list").appendChild(d); scrollDown(true); rebuildOutline();
 }
 function addAssistant(){
   clearEmpty();
@@ -649,8 +668,9 @@ function addAssistant(){
   d.innerHTML = `<div class="steps"></div><div class="status" hidden></div><div class="bubble typing"></div><div class="meta"></div>
     <div class="acts"><button class="retry" title="用同一個問題重新回答（這則回答會被取代）">↻ 重新回答</button></div>`;
   d.querySelector(".retry").onclick = () => retryLast(d);
+  d.prepend(timeTag(0));
   $("#list").appendChild(d); scrollDown();
-  return { el:d, steps:d.querySelector(".steps"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
+  return { el:d, time:d.querySelector(".mtime"), steps:d.querySelector(".steps"), status:d.querySelector(".status"), bubble:d.querySelector(".bubble"), meta:d.querySelector(".meta") };
 }
 
 /* ---------- 重問 / 編輯 ---------- */
@@ -739,6 +759,7 @@ async function send(){
 async function runTurn(text, files, fork){
   let pdfFailures = [], needComp = null;
   clearSuggestion();
+  if (!convId && !fork && !document.querySelector("#list .convtime")){ clearEmpty(); convHeader(Date.now() / 1000); }
   addUser(text, files);
   const a = addAssistant();
   const st = startStatus(a);
@@ -766,7 +787,7 @@ async function runTurn(text, files, fork){
           toast(`「${ev.from}」已被 Google 下架，這次改用 ${modelLabel(ev.to)} 回答`);
           if (currentModel() === ev.from && setModel(ev.to)) store.set("model", ev.to);
         }
-        if (ev.event === "retry") st.set(`agy 暫時找不到這個模型，自動重試中（第 ${ev.attempt}/${ev.max} 次）`);
+        if (ev.event === "retry") st.set(`${ev.busy ? "Google 服務暫時忙碌（503）" : "agy 暫時找不到這個模型"}，自動重試中（第 ${ev.attempt}/${ev.max} 次）`);
         const su = ev.step_update;
         if (su){
           if (su.step_type === "agent_response" && su.text_delta){ reply += su.text_delta; st.hide(); }
@@ -783,6 +804,7 @@ async function runTurn(text, files, fork){
           const r = ev.result || {};
           if (r.response) reply = r.response;
           const u = r.usage || {};
+          a.time.textContent = fmtTime(Date.now() / 1000);
           a.meta.textContent = `${modelLabel(currentModel())} ·${st.elapsed().toFixed(1)} 秒 · ${(u.turn_tokens ?? u.total_tokens)?.toLocaleString() ?? "?"} tokens`;
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
@@ -790,7 +812,10 @@ async function runTurn(text, files, fork){
         if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
         if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
-        if (ev.event === "need_component") needComp = ev;
+        if (ev.event === "need_component"){
+          if (ev.files.length) needComp = ev;            // Typst：回答完才編譯，卡片放最後
+          else showComponentCard(a, ev);                 // 讀 PDF 的元件：模型正在等，馬上顯示
+        }
         if (ev.event === "permission") showPermissionCard(a, ev, st);
         if (ev.event === "checkpoint") showCheckpoint(a, ev);
         if (ev.event === "permission_done") showPermissionNote(a, ev);
@@ -1298,10 +1323,12 @@ async function openConv(id){
   const h = await (await fetch("/api/history/" + id)).json();
   if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
   convId = id; $("#list").innerHTML = ""; clearSuggestion();
+  if (h.created) convHeader(h.created);
   for (const m of h.messages){
-    if (m.role === "user") addUser(m.text, m.files);
+    if (m.role === "user") addUser(m.text, m.files, m.t || 0);
     else {
       const a = addAssistant(); a.bubble.classList.remove("typing");
+      if (m.t) a.time.textContent = fmtTime(m.t);
       (m.steps || []).forEach(s => { const x = document.createElement("div"); x.textContent = stepLabel(s); a.steps.appendChild(x); });
       a.bubble.innerHTML = renderMd(m.text);
       if (m.checkpoint) showCheckpoint(a, m.checkpoint);
@@ -1320,13 +1347,7 @@ function emptyState(){
       ${p.memory ? `🧠 已有專案記憶（${p.memory.split("\n").filter(l => /^\s*[-*]/.test(l)).length} 條重點），新對話會記得之前討論過的內容。<br>` : ""}
       <button onclick="openProjectDialog()">管理檔案與指示</button></div></div>`;
 }
-/* ---------- 一般對話首頁：問候、快速開始卡片、最近的對話、小技巧 ---------- */
-const HOME_CARDS = [
-  {ic:"📷", t:"解析一張圖片", d:"貼上截圖或板書照片，逐步說明內容", p:"這張圖在說什麼？請逐步說明重點，有公式的話也幫我整理。", hint:"先按 Ctrl+V 貼上圖片，再送出"},
-  {ic:"📄", t:"讀懂一份 PDF", d:"論文、講義整理成重點筆記", p:"請閱讀附件的 PDF，整理成重點筆記（包含關鍵公式與推導脈絡）。", hint:"把 PDF 拖進輸入框，再送出"},
-  {ic:"∑", t:"檢查我的推導", d:"找出錯在哪一步，並說明物理直覺", p:"幫我檢查下面這段推導是否正確；有錯的話指出是哪一步，並說明正確的想法：\n\n"},
-  {ic:"🌐", t:"查最新資料", d:"開啟聯網搜尋，附上來源", p:"請上網搜尋並整理：", search:true},
-];
+/* ---------- 一般對話首頁：問候、最近的對話、小技巧（打開 AI 都有目的，不放快速開始卡片） ---------- */
 const HOME_TIPS = [
   "直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 就能貼上截圖",
   "把多份 PDF 放進「專案」，模型會自己挑需要的讀",
@@ -1344,20 +1365,12 @@ function homeHtml(){
     <img class="logo" src="/icon.png" alt="">
     <h1>${hello}，今天想<span class="hl">研究什麼</span>？</h1>
     <p class="sub">${day} · <span id="homeModel">${escapeHtml(modelLabel(currentModel()) || "")}</span></p>
-    <div class="cards">${HOME_CARDS.map((c, i) => `<div class="card" data-i="${i}"><span class="ic">${c.ic}</span><b>${c.t}</b><small>${c.d}</small></div>`).join("")}</div>
     <div class="recent" id="homeRecent" hidden><h5>最近的對話</h5><div class="chipz"></div></div>
     <p class="tip">💡 ${tip}</p></div>`;
 }
 async function fillHome(){
   const home = document.querySelector("#empty.home");
   if (!home) return;
-  home.querySelectorAll(".card").forEach(el => el.onclick = () => {
-    const c = HOME_CARDS[+el.dataset.i];
-    if (c.search && !searchOn) $("#searchBtn").click();
-    $("#input").value = c.p; autoGrow(); $("#input").focus();
-    $("#input").setSelectionRange(c.p.length, c.p.length);
-    if (c.hint) $("#hint").textContent = "💡 " + c.hint;
-  });
   try {
     const items = (await (await fetch("/api/history?project=")).json()).items.slice(0, 5);
     const box = home.querySelector("#homeRecent");
@@ -1492,6 +1505,7 @@ function applyPrefs(p){
   applyBackground(p);
   document.documentElement.style.setProperty("--fs", FONT[p.font_size] || FONT.normal);
   document.documentElement.style.setProperty("--chatw", WIDTH[p.chat_width] || WIDTH.normal);
+  document.body.classList.toggle("notimes", p.show_times === false);
   basePlaceholder = p.send_key === "ctrl_enter" ? "問點什麼…（Ctrl+Enter 送出，Enter 換行）" : "問點什麼…（Enter 送出，Shift+Enter 換行）";
   if (!suggestion) $("#input").placeholder = basePlaceholder;
 }
@@ -1547,17 +1561,17 @@ function showComponentCard(a, ev){
   const info = ev.info, names = ev.files.map(f => baseName(f)).join("、");
   const card = document.createElement("div"); card.className = "permcard";
   card.innerHTML = `<div class="ph">📦 需要下載元件</div>
-    <p>要把 <b></b> 轉成 PDF，需要先下載 <b>${escapeHtml(info.name)}</b>。</p>
+    <p>${ev.files.length ? `要把 <b class="fname"></b> 轉成 PDF，` : "AI 想讀取 PDF（搜尋、取出文字、看頁面），"}需要先下載 <b>${escapeHtml(info.name)}</b>。</p>
     <ul><li>用途：${escapeHtml(info.purpose)}</li><li>大小：${escapeHtml(info.size_text)}</li>
-      <li>授權：${escapeHtml(info.license)}（免費、開源）</li><li>來源：官方 GitHub 發布，下載後會核對檢查碼</li>
+      <li>授權：${escapeHtml(info.license)}（免費、開源）</li><li>來源：${escapeHtml(info.source || "官方發布")}，下載後會核對檢查碼</li>
       <li>只需要下載一次；之後可以在「⚙ 設定 → 元件」移除</li></ul>
     <div class="pbtns"><button class="primary allow">允許下載</button><button class="deny">這次不要</button></div>
     <div class="pprog" hidden><div class="bar"><i></i></div><span class="ptxt">連線中…</span><button class="cancel">取消</button></div>`;
-  card.querySelector("p b").textContent = names;
+  if (ev.files.length) card.querySelector(".fname").textContent = names;
   a.el.insertBefore(card, a.meta);
   const prog = card.querySelector(".pprog"), bar = prog.querySelector("i"), txt = prog.querySelector(".ptxt");
   card.querySelector(".deny").onclick = () => {
-    card.innerHTML = `<div class="ph muted">已略過下載</div><p class="meta">.typ 原始檔已經存在 output 資料夾；之後可以在「⚙ 設定 → 元件」安裝 Typst，再請 AI 重新產生。</p>`;
+    card.innerHTML = `<div class="ph muted">已略過下載</div><p class="meta">${ev.files.length ? ".typ 原始檔已經存在 output 資料夾；之後可以在「⚙ 設定 → 元件」安裝 Typst，再請 AI 重新產生。" : "之後可以在「⚙ 設定 → 元件」安裝。"}</p>`;
   };
   card.querySelector(".cancel").onclick = () => post("/api/components/cancel", {id:ev.id});
   card.querySelector(".allow").onclick = async () => {
@@ -1567,7 +1581,12 @@ function showComponentCard(a, ev){
       txt.textContent = `${p.msg || "下載中"}　${fmtMB(p.done)} / ${fmtMB(p.total)}`;
     });
     if (!r.ok){ txt.textContent = r.message; card.querySelector(".pbtns").hidden = false; card.querySelector(".allow").textContent = "再試一次"; return; }
-    txt.textContent = "安裝完成，正在產生 PDF…"; bar.style.width = "100%";
+    bar.style.width = "100%";
+    if (!ev.files.length){          // 讀 PDF 的元件：裝好後請使用者重新回答
+      card.innerHTML = `<div class="ph">✔ 已安裝 ${escapeHtml(info.name)}</div><p class="meta">按這則回答下方的「↻ 重新回答」，AI 就能用它讀 PDF 了。</p>`;
+      return;
+    }
+    txt.textContent = "安裝完成，正在產生 PDF…";
     const c = await post("/api/typst/compile", {files:ev.files, conversation_id:convId});
     const ok = (c.results || []).filter(x => x.ok), bad = (c.results || []).filter(x => !x.ok);
     card.innerHTML = `<div class="ph">✔ 已安裝 ${escapeHtml(info.name)}</div>` + (c.links ? renderMd(c.links) : "") +

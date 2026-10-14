@@ -41,8 +41,24 @@ COMPONENTS = {
         "size": 22463684,
         "size_text": "下載約 21 MB，安裝後約 55 MB（含常用套件）",
         "license": "Apache-2.0",
+        "source": "官方 GitHub 發布",
         "extract": {"typst-x86_64-pc-windows-msvc/typst.exe": "typst.exe"},
         "check": "typst.exe",
+    },
+    # 內建工具 lumina 讀 PDF 用（搜尋、取文字、把頁面畫成圖片）。選發布超過兩週的版本，不追最新
+    "pdfium": {
+        "name": "PDFium（讀取 PDF）",
+        "purpose": "讓 AI 搜尋課本、取出指定頁的文字、把頁面轉成圖片看公式與圖表（Chrome 也是用它顯示 PDF）",
+        "version": "5.13.0",
+        "url": "https://files.pythonhosted.org/packages/5d/99/a37b6b902457569468ed5908c94e56cb6c4032541f02cf89f723d42a9148/"
+               "pypdfium2-5.13.0-py3-none-win_amd64.whl",
+        "sha256": "47dcca2a8d507b5fd24f94c3c9d48fb379430f097bc20f01beff6c963ffbcedb",
+        "size": 3885553,
+        "size_text": "下載約 3.7 MB，安裝後約 10 MB",
+        "license": "Apache-2.0／BSD-3-Clause",
+        "source": "Python 官方套件庫 PyPI（pypdfium2）",
+        "extract_all": True,                # 整個 wheel 解開（它本身就是 zip），放進 sys.path 就能用
+        "check": "pypdfium2/__init__.py",
     },
 }
 
@@ -73,7 +89,7 @@ def status():
     for cid, c in COMPONENTS.items():
         f = folder(cid)
         used = sum(p.stat().st_size for p in f.rglob("*") if p.is_file()) if f.exists() else 0
-        out[cid] = {k: c[k] for k in ("name", "purpose", "version", "size_text", "license")}
+        out[cid] = {k: c[k] for k in ("name", "purpose", "version", "size_text", "license", "source")}
         out[cid].update(installed=installed(cid), used=human(used) if used else "")
     return out
 
@@ -208,7 +224,14 @@ def install(cid, progress=lambda done, total, msg="": None, cancel=None):
         archive = _download(c, COMPONENTS_DIR / f".{cid}.zip", lambda d, t: progress(d, t, "下載中"), cancel)
         progress(c["size"], c["size"], "解壓縮中")
         with zipfile.ZipFile(archive) as zf:
-            for member, target in c["extract"].items():
+            if c.get("extract_all"):
+                base = work.resolve()
+                for member in zf.namelist():
+                    dest = (work / member).resolve()
+                    if base not in dest.parents:          # 防 zip 裡的 ../ 寫到資料夾外面
+                        raise RuntimeError(f"壓縮檔內容不安全：{member}")
+                zf.extractall(work)
+            for member, target in c.get("extract", {}).items():
                 (work / target).parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(member) as src, open(work / target, "wb") as out:
                     shutil.copyfileobj(src, out)

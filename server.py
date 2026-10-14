@@ -74,6 +74,7 @@ DEFAULT_SETTINGS = {
     # 回覆
     "notify_sound": True,         # 回答完成時（視窗不在前面）播放提示音
     "notify_title": True,         # 回答完成時分頁標題提醒
+    "show_times": True,           # 顯示每則訊息的時間與對話建立時間
     "latex_copy": True,           # 點公式複製 LaTeX 原始碼
     "pdf_verify": True,           # PDF 編譯後把頁面轉成圖片讓模型檢查成品，有錯自動修正
     "suggest_reply": True,       # 回答完預測使用者的下一句，輸入框按 Tab 採用（用 Gemini Flash）
@@ -280,6 +281,37 @@ def log_perm(entry):
         pass
 
 
+LUMINA_ARG = r"""(?:"[^"`$]*"|[^\s"'`$;&|<>(){}]+)"""
+LUMINA_RE = re.compile(r"^\s*lumina(?:\.cmd)?\s+(pdf-info|pdf-find|pdf-text|pdf-page|pdf-thumbs)\s+(" + LUMINA_ARG + r")"
+                       r"(?:\s+(" + LUMINA_ARG + r"))?\s*$", re.I)
+
+
+def lumina_ok(command, cwd, roots):
+    """內建工具的指令：格式完全符合、檔案是允許資料夾裡的 PDF、工作資料夾裡沒有冒充的 lumina 才算。"""
+    m = LUMINA_RE.match(command or "")
+    if not m:
+        return False
+    f = Path(m.group(2).strip('"'))
+    if not f.is_absolute():
+        f = Path(cwd or WORK) / f
+    if f.suffix.lower() != ".pdf" or not command_guard._inside(f, [Path(r).resolve() for r in roots]):
+        return False
+    return not any((Path(cwd or WORK) / f"lumina{ext}").exists() for ext in ("", ".bat", ".cmd", ".exe", ".ps1", ".com"))
+
+
+def install_lumina():
+    """data/bin/lumina.cmd 指向內建工具，並把 data/bin 放進 PATH（agy 執行的指令會繼承）。"""
+    bin_dir = DATA / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    py = Path(sys.executable)
+    if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
+        py = py.with_name("python.exe")             # 要有主控台輸出，模型才讀得到結果
+    line = f'@"{py}" -X utf8 "{ROOT / "tools" / "lumina.py"}" %*'
+    (bin_dir / "lumina.cmd").write_text(line + "\r\n", encoding="utf-8")
+    if str(bin_dir) not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
 def decide_tool(payload):
     """agy 的 PreToolUse 輸入 → hook 的回覆 {"decision", "reason"}。"""
     call = payload.get("toolCall") or {}
@@ -287,8 +319,18 @@ def decide_tool(payload):
     cid = str(payload.get("conversationId") or "")
     run = ACTIVE.get(cid)
     roots = [WORK, OUTPUT, UPLOADS] + ([Path(run["cwd"])] if run else [])
-    a = command_guard.assess(tool, args, roots)
     command = str(args.get("CommandLine") or "")
+    if tool == "run_command" and lumina_ok(command, str(args.get("Cwd") or ""), roots):
+        if not components.installed("pdfium"):
+            if run:                                 # 跳出下載元件的同意卡
+                run["emit"]({"event": "need_component", "id": "pdfium", "info": components.status()["pdfium"], "files": []})
+            return {"decision": "deny", "reason": "讀 PDF 的元件還沒下載，介面已經在畫面上詢問使用者要不要下載。"
+                                                  "不要用 view_file 讀整份 PDF（很慢，掃描檔也讀不到），請直接結束這次回答，"
+                                                  "告訴使用者：下載完成後按「重新回答」就能查。"}
+        log_perm({"tool": tool, "command": command, "cid": cid, "level": "builtin", "decision": "auto_approve",
+                  "note": "內建工具"})
+        return {"decision": "auto_approve"}
+    a = command_guard.assess(tool, args, roots)
     base = {"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
 
     def done(decision, reason="", note="", asked=False):
@@ -638,6 +680,15 @@ OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md
                "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。"
                "要產生 PDF 時，.typ 原始檔請存到 {dir}\\" + TYP_SRC + "\\ 資料夾（介面會把 PDF 編譯到 {dir}\\）。"
                "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
+
+TOOLS_HINT = ("\n\n[內建工具：讀 PDF] 這個介面提供唯讀的 lumina 指令，用終端機執行、不需要使用者同意。"
+              "讀 PDF（課本、講義、論文）時請優先用它，不要自己寫 python 或其他程式去讀：\n"
+              "- lumina pdf-info \"檔案\"：頁數、書籤目錄、書上印的頁碼和 PDF 頁碼的差（找「課本 p.63」先用這個）、哪些頁是掃描圖片\n"
+              "- lumina pdf-find \"檔案\" \"關鍵字\"：全文搜尋，回傳在 PDF 第幾頁和前後文（例如找習題編號 3.4）\n"
+              "- lumina pdf-text \"檔案\" 63-65：取出指定頁的文字（PDF 的第幾頁，從 1 開始；一次最多 15 頁）\n"
+              "- lumina pdf-page \"檔案\" 63：把那一頁轉成圖片，再用 view_file 打開圖片看公式、圖表（掃描檔一定要用這個）\n"
+              "- lumina pdf-thumbs \"檔案\" 70-81：12 頁縮圖排成一張總覽圖，用 view_file 看；掃描檔找某題在哪幾頁時先用這個，不要一頁一頁翻\n"
+              "檔案路徑用完整路徑並加上引號；指令一次只執行一個，不要用 ; | && 串接。")
 
 # ---------- 桌面捷徑 ----------
 SHORTCUT_NAME = "Antigravity UI.lnk"
@@ -1695,7 +1746,7 @@ class Handler(BaseHTTPRequestHandler):
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
             if prior:
                 instructions += "\n\n" + history_block(prior)
-        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=out_dir(pr))
+        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=out_dir(pr)) + TOOLS_HINT
         prompt = build_prompt(text + extra_hint, files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
         # agy 1.3.3 起讀工作區以外的檔案需要授權（非互動模式會直接拒絕），
@@ -1751,7 +1802,8 @@ class Handler(BaseHTTPRequestHandler):
             with RUNS_LOCK:
                 RUNS[run_id] = proc
             first = proc.stdout.readline()
-            if b"invalid model selection" not in first:
+            busy = b"UNAVAILABLE" in first and b"503" in first     # Google 暫時忙碌（常見，過幾秒就好）
+            if b"invalid model selection" not in first and not busy:
                 break                          # 正常開始，往下照常串流
             rest = proc.stdout.read()
             proc.wait()
@@ -1760,8 +1812,8 @@ class Handler(BaseHTTPRequestHandler):
                 proc = None
                 pre_output = text_out
                 break
-            emit({"event": "retry", "attempt": attempt, "max": MODEL_RETRIES})
-            time.sleep(2)
+            emit({"event": "retry", "attempt": attempt, "max": MODEL_RETRIES, "busy": busy})
+            time.sleep(4 if busy else 2)
 
         reply, steps, new_cid, raw_other, denied = "", [], cid, [], []
         if proc is None:                        # 重試用完仍失敗：把 agy 的輸出當成錯誤訊息
@@ -1881,8 +1933,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         if new_cid and (reply or steps or old):
-            user_msg = {"role": "user", "text": text, "files": files}
-            reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps}
+            user_msg = {"role": "user", "text": text, "files": files, "t": started}
+            reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps, "t": time.time()}
             if images:
                 reply_msg["images"] = [str(p) for p in images]
             if cp:
@@ -1960,6 +2012,7 @@ def main():
     threading.Thread(target=sync_transcripts, daemon=True).start()
     threading.Thread(target=sync_all_skills, daemon=True).start()
     threading.Thread(target=tidy_output, daemon=True).start()
+    install_lumina()
     threading.Thread(target=agy_self_update, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
