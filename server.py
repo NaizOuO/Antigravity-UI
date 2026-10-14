@@ -248,6 +248,24 @@ def hook_command():
             f"http://{HOST}:{PORT}/api/permission/hook")
 
 
+def write_mcp(target, work_dir=None):
+    """在 agy 的工作資料夾寫入 .agents/mcp_config.json：啟動 Lumina 的工具伺服器（讀 PDF、截圖、虛擬環境）。"""
+    py = Path(sys.executable)
+    if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
+        py = py.with_name("python.exe")
+    roots = [str(Path(target).resolve()), str(UPLOADS), str(OUTPUT)]
+    args = [str(ROOT / "tools" / "lumina_mcp.py"), "--roots", ";".join(roots)] + (["--work", str(work_dir)] if work_dir else [])
+    cfg = {"mcpServers": {"lumina": {"command": str(py), "args": args, "env": {"PYTHONUTF8": "1"}}}}
+    p = Path(target) / ".agents" / "mcp_config.json"
+    text = json.dumps(cfg, ensure_ascii=False, indent=1)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists() or p.read_text(encoding="utf-8") != text:
+            p.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def write_hooks(target):
     """在 agy 的工作資料夾寫入 hooks.json（每次對話前都重寫，被改掉也會還原）。"""
     d = Path(target) / ".agents"
@@ -384,7 +402,9 @@ def _decide_tool(payload):
     # 讀 agy 工作區以外的檔案：agy 自己會拒絕，而且一拒絕整輪就中斷、沒有回答。
     # 所以在這裡先拒絕並說明原因（模型收到原因會改用其他方法繼續）
     if run and tool != "run_command":
-        allowed = [Path(run["cwd"]), UPLOADS, OUTPUT] + ([Path(run["work_dir"])] if work else [])
+        # agy 會先讀自己存的 MCP 工具說明（~/.gemini/antigravity-cli/mcp/…）才呼叫工具，這個要放行
+        allowed = ([Path(run["cwd"]), UPLOADS, OUTPUT, AGY_BRAIN.parent / "mcp"]
+                   + ([Path(run["work_dir"])] if work else []))
         outside = [f for f in command_guard._path_args(args)
                    if Path(f).is_absolute() and not command_guard._inside(f, [a.resolve() for a in allowed])]
         if outside:
@@ -405,13 +425,21 @@ def _decide_tool(payload):
             return {"decision": "deny", "reason": f"這個 PDF 有 {f.stat().st_size // 1048576} MB，整本讀進來會讓之後每一輪都變慢。"
                                                   "請改用 lumina：pdf-info 看目錄、pdf-find 搜尋、pdf-text 讀指定頁、"
                                                   "pdf-thumbs 找位置、pdf-page 看清楚的頁面。"}
-    # 對話模式：修改檔案只能寫到 output（讀檔不受影響）；工作模式才能改綁定的資料夾
-    a = command_guard.assess(tool, args, roots if (work or tool == "run_command") else [OUTPUT])
-    base ={"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
+    if tool == "call_mcp_tool":                # Lumina 的工具伺服器（讀 PDF、截圖、虛擬環境）或其他 MCP 工具
+        r = mcp_assess(args, run, work, cid)
+        if "decision" in r:
+            return r
+        a, command = r["a"], r["command"]
+        args = {**args, "Cwd": run["work_dir"] if work else ""}
+    else:
+        # 修改檔案：對話區只能寫 output；Code 區只能改工作資料夾（不要順手同步到 output 之類的其他地方）
+        edit_roots = [Path(run["work_dir"])] if work else [OUTPUT]
+        a = command_guard.assess(tool, args, roots if tool == "run_command" else edit_roots)
+    base = {"tool": tool, "command": command, "cwd": str(args.get("Cwd") or ""), "cid": cid, "level": a["level"]}
 
     def done(decision, reason="", note="", asked=False):
         log_perm({**base, "decision": decision, "note": note or reason})
-        if run and tool == "run_command":
+        if run and tool in ("run_command", "call_mcp_tool"):
             run["emit"]({"event": "permission_done", "command": command, "decision": decision,
                          "note": note or reason, "asked": asked})
         return {"decision": decision, **({"reason": reason} if reason else {})}
@@ -420,8 +448,9 @@ def _decide_tool(payload):
         return {"decision": "allow"}
     if a["level"] == "block":
         why = "；".join(a["reasons"])
-        return done("deny", f"這個操作被介面的安全規則擋下（{why}），不能執行。請改用其他方法，或直接回答使用者。", why)
-    if tool != "run_command":
+        return done("deny", f"使用者的安全設定不允許這個操作（{why}）。這是使用者的要求，請遵守、不要換個寫法再試；"
+                            "改用其他方法完成，或直接回答使用者。", why)
+    if tool not in ("run_command", "call_mcp_tool"):
         return {"decision": "allow"}
     if not work:
         return done("deny", "這是對話模式，不能執行終端機指令（內建的 lumina 工具除外）。請改用 view_file、lumina 讀取資料後直接回答；"
@@ -442,7 +471,8 @@ def _decide_tool(payload):
     run["emit"]({"event": "permission", "id": rid, "nonce": nonce, "command": command, "cwd": base["cwd"],
                  "summary": str(args.get("toolSummary") or args.get("toolAction") or ""), "level": a["level"],
                  "warnings": a["warnings"], "key": a["key"], "program": a["program"],
-                 "can_conv": bool(a["program"]) and not network,
+                 # 串了好幾個指令時不給「這段對話都允許」：選項只會以第一個指令命名，按了等於允許其他沒看清楚的指令
+                 "can_conv": bool(a["program"]) and not network and a.get("segments", 1) == 1,
                  "script": (a["script"] or "")[:6000], "script_path": a["script_path"], "wait": PERM_WAIT})
     req["deadline"] = time.time() + PERM_WAIT
     while not req["event"].wait(1):            # 使用者按「＋5 分鐘」會把 deadline 往後延
@@ -468,6 +498,42 @@ def _decide_tool(payload):
     reason = str(ans.get("reason") or "").strip()[:500]
     return done("deny", "使用者拒絕執行這個指令。" + (f"使用者說：{reason}" if reason else "請改用其他方法或直接回答。"),
                 "拒絕" + (f"：{reason}" if reason else ""), asked=True)
+
+
+def mcp_assess(args, run, work, cid):
+    """MCP 工具呼叫的判斷：回傳 {"decision": …}（直接決定）或 {"a": 風險評估, "command": 給使用者看的文字}（要詢問）。"""
+    server, name = str(args.get("ServerName") or ""), str(args.get("ToolName") or "")
+    a = args.get("Arguments") or {}
+    risk = lambda level, warnings, key=None, program="": {"level": level, "reasons": [], "warnings": warnings, "key": key,
+                                                          "program": program, "script": None, "script_path": None, "segments": 1}
+    if server != "lumina":                   # 使用者自己加的其他 MCP 工具：每次詢問
+        return {"a": risk("strict", [f"使用其他 MCP 工具（{server}）"]),
+                "command": f"MCP 工具 {server} / {name}：{json.dumps(a, ensure_ascii=False)[:300]}"}
+    if name.startswith("pdf_"):              # 讀 PDF：唯讀、檔案範圍由工具伺服器自己檢查
+        if not components.installed("pdfium"):
+            if run:
+                run["emit"]({"event": "need_component", "id": "pdfium", "info": components.status()["pdfium"], "files": []})
+            return {"decision": "deny", "reason": "讀 PDF 的元件還沒下載，介面已經在畫面上詢問使用者。不要改用 view_file 讀整份 PDF；"
+                                                  "請直接結束這次回答，告訴使用者下載完成後按「重新回答」。"}
+        log_perm({"tool": "lumina." + name, "command": str(a.get("file") or ""), "cid": cid, "level": "builtin",
+                  "decision": "auto_approve", "note": "內建工具"})
+        return {"decision": "auto_approve"}
+    if name in ("run_capture", "venv_create", "venv_install") and not work:
+        return {"decision": "deny", "reason": f"{name} 只能在 Lumina Code 的工作資料夾裡使用。請直接回答使用者；"
+                                              "需要執行程式時，告訴使用者切到左上角的「Code」區。"}
+    if name == "run_capture":
+        extra = " ".join(map(str, a.get("args") or []))
+        typed = f"，先輸入 {json.dumps(a['input'], ensure_ascii=False)}" if a.get("input") else ""
+        return {"a": risk("strict", ["會在螢幕上開一個視窗執行這個程式幾秒，截下那個視窗的畫面後自動關閉"], program="run_capture"),
+                "command": f"執行並截圖：{a.get('program', '')} {extra}".strip() + f"（{a.get('seconds') or 3} 秒{typed}）"}
+    if name == "venv_create":
+        return {"a": risk("ask", ["在工作資料夾建立 Python 虛擬環境 .venv"], key="lumina venv_create", program="venv_create"),
+                "command": "建立 Python 虛擬環境：.venv"}
+    if name == "venv_install":
+        pk = "、".join(map(str, a.get("packages") or []))
+        return {"a": risk("strict", [f"會連上網路下載並安裝套件：{pk}（請確認是你知道的套件）"], program="venv_install"),
+                "command": f"安裝 Python 套件到 .venv：{pk}"}
+    return {"decision": "deny", "reason": f"沒有 {name} 這個工具。"}
 
 
 def deny_pending(cid):
@@ -828,17 +894,18 @@ OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md
 
 WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。程式碼、專案檔案一律建立和修改在這個資料夾裡"
              "（不是 output）；執行指令時把 Cwd 設成這個資料夾。寫完或改完程式後，一定要實際編譯或執行一次確認沒有錯誤"
-             "（例如 g++ 編譯、python 執行），有錯就修到通過，不要沒驗證就說完成。執行指令前使用者會看到授權卡，請簡短說明用途。")
-TOOLS_HINT = ("\n\n[內建工具：讀 PDF] 這個介面提供唯讀的 lumina 指令，用終端機執行、不需要使用者同意。"
-              "先看對話前文、使用者的附件和專案記憶裡有沒有需要的內容（例如之前已經查過的題目原文和頁碼），有就直接用，不要重查；"
-              "真的需要 PDF 裡的內容時才用它，而且只查需要的那幾頁（它是用來取代「整本讀進來」，不是每題都要翻一遍）。"
-              "不要自己寫 python 或其他程式去讀：\n"
-              "- lumina pdf-info \"檔案\"：頁數、書籤目錄、書上印的頁碼和 PDF 頁碼的差（找「課本 p.63」先用這個）、哪些頁是掃描圖片\n"
-              "- lumina pdf-find \"檔案\" \"關鍵字\"：全文搜尋，回傳在 PDF 第幾頁和前後文（例如找習題編號 3.4）\n"
-              "- lumina pdf-text \"檔案\" 63-65：取出指定頁的文字（PDF 的第幾頁，從 1 開始；一次最多 15 頁）\n"
-              "- lumina pdf-page \"檔案\" 63：把那一頁轉成圖片，再用 view_file 打開圖片看公式、圖表（掃描檔一定要用這個）\n"
-              "- lumina pdf-thumbs \"檔案\" 70-81：12 頁縮圖排成一張總覽圖，用 view_file 看；掃描檔找某題在哪幾頁時先用這個，不要一頁一頁翻\n"
-              "檔案路徑用完整路徑並加上引號；指令一次只執行一個，不要用 ; | && 串接。")
+             "（例如 g++ 編譯、python 執行），有錯就修到通過，不要沒驗證就說完成。執行指令前使用者會看到授權卡，請簡短說明用途。"
+             "只修改這個資料夾裡的檔案，不要另外複製一份到 output 或其他地方。"
+             "不要直接執行會一直跑下去（例如時鐘、遊戲迴圈、伺服器）或需要鍵盤輸入的程式：它會卡住、停不下來；"
+             "要確認畫面就加一個執行一次就結束的測試參數（例如 --test），或只編譯並請使用者自己執行。"
+             "能一個指令做完就不要用 ; 串好幾個指令（使用者要逐一確認）。"
+             "有畫面的程式（主控台繪圖、視窗程式）用 run_capture 執行並截圖確認。"
+             "完成的標準：程式編譯或執行沒有錯誤，而且你實際看過執行結果；回答最後用一兩句說明你驗證了什麼、結果如何。"
+             "Python 專案要安裝套件時先 venv_create，再用 venv_install，執行用 .venv\\Scripts\\python。")
+TOOLS_HINT = ("\n\n[內建工具] 這個介面提供 lumina 工具（pdf_info、pdf_find、pdf_text、pdf_page、pdf_thumbs；Code 區另有 run_capture、"
+              "venv_create、venv_install），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
+              "先看對話前文和附件裡有沒有需要的內容，有就不要重查。看不到這些工具時，可以改用終端機指令 "
+              "lumina pdf-info \"檔案\"（pdf-find、pdf-text、pdf-page、pdf-thumbs 同理）。")
 
 # ---------- 桌面捷徑 ----------
 SHORTCUT_NAME = "Lumina.lnk"
@@ -2245,6 +2312,7 @@ class Handler(BaseHTTPRequestHandler):
                     pass
 
         write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
+        write_mcp(cwd, work_dir)       # Lumina 的工具伺服器（Code 區才帶工作資料夾：截圖、虛擬環境只能在那裡用）
         try:                           # 檢查點：記下模型這輪可以改到的資料夾，改壞了可以復原
             snap = checkpoints.take([work_dir] if work_dir else [cwd, out_dir(pr)])
         except Exception:

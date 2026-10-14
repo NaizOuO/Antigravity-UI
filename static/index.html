@@ -1202,14 +1202,19 @@ function setArea(a, keepConv){
   a === "code" ? loadCode() : loadHistory();
 }
 document.querySelectorAll("#areaTabs button").forEach(b => b.onclick = () => { if (b.dataset.area !== area) setArea(b.dataset.area); });
+let codeLoad = 0;
 async function loadCode(){
-  workspaces = (await (await fetch("/api/code")).json()).items;
+  const token = ++codeLoad;               // 同時被叫兩次時，只用最後一次的結果（不然資料夾會重複出現）
+  const ws = (await (await fetch("/api/code")).json()).items;
+  const lists = await Promise.all(ws.map(w => fetch("/api/history?code=" + w.id).then(r => r.json()).then(j => j.items)));
+  if (token !== codeLoad) return;
+  workspaces = ws;
   if (codeWs && !curWs()) codeWs = "";
   if (!codeWs && workspaces.length) codeWs = workspaces[workspaces.length - 1].id;
   store.set("codeWs", codeWs);
   const tree = $("#codeTree"); tree.innerHTML = "";
   if (!workspaces.length) tree.innerHTML = `<div class="pfempty">按右邊的 ＋ 加入一個資料夾，讓 AI 在裡面寫程式</div>`;
-  for (const w of workspaces){
+  workspaces.forEach((w, wi) => {
     const g = document.createElement("div"); g.className = "wsgroup" + (w.id === codeWs ? " cur" : "");
     const head = listItem("🛠 " + w.name, false, [
       ["＋", "在這個資料夾開新的工作階段", () => { codeWs = w.id; store.set("codeWs", w.id); newConv(); loadCode(); }],
@@ -1222,8 +1227,7 @@ async function loadCode(){
     head.classList.add("wshead"); head.title = w.work_dir + (w.exists ? "" : "（找不到這個資料夾）");
     head.onclick = () => { codeWs = w.id; store.set("codeWs", w.id); newConv(); loadCode(); };
     g.appendChild(head);
-    const items = (await (await fetch("/api/history?code=" + w.id)).json()).items;
-    for (const it of items.slice(0, 30)){
+    for (const it of lists[wi].slice(0, 30)){
       const d = listItem(it.title || "（未命名）", it.id === convId, [
         ["✎", "改名", () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}))],
         ["🗑", "刪除", async () => { if (!confirm("刪除這個工作階段的紀錄？（資料夾裡的檔案不會動）")) return;
@@ -1234,7 +1238,7 @@ async function loadCode(){
       g.appendChild(d);
     }
     tree.appendChild(g);
-  }
+  });
   paintProjectChip();
   if (!convId && $("#empty")){ $("#list").innerHTML = emptyState(); }   // 首頁用到工作資料夾的資訊：載入後重畫
 }
@@ -1821,7 +1825,8 @@ function openPermDock(){
   dock.className = ev.level === "strict" ? "strict" : "";
   dock.innerHTML = `<div class="ph">⌨ 要執行這個指令嗎？${ev.level === "strict" ? "<span class=\"warnchip\">風險較高</span>" : ""}<span class="sp"></span><span class="meta pleft"></span><button class="pmore" title="還在想或查資料">＋5 分鐘</button></div>
     <pre class="pcode pcmd"></pre>
-    <div class="meta">位置：<span class="pcwd"></span>${ev.summary ? "　模型的說明（不一定準確）：<span class=\"psum\"></span>" : ""}</div>
+    <div class="meta">位置：<span class="pcwd"></span></div>
+    ${ev.summary ? "<div class=\"meta\">模型的說明（不一定準確）：<span class=\"psum\"></span></div>" : ""}
     ${ev.warnings.length ? `<ul class="pwarn">${ev.warnings.map(w => `<li>⚠ ${escapeHtml(w)}</li>`).join("")}</ul>` : ""}
     ${ev.script ? `<details><summary>要執行的腳本內容</summary><pre class="pcode pscript"></pre></details>` : ""}
     <div class="popts">${opts.map(([c, t], i) => `<button data-c="${c}"${c === "once" ? ' class="primary"' : ""}><kbd>${i + 1}</kbd> ${escapeHtml(t)}</button>`).join("")}</div>

@@ -76,7 +76,11 @@ RUNNERS = {"npm", "npx", "yarn", "pnpm", "make", "nmake", "cmake", "cargo", "go"
            "pytest", "tox", "nox", "invoke", "pre-commit", "poetry", "pipenv", "uv", "hatch", "msbuild", "jupyter"}
 # 可以「永遠允許」的只有這些唯讀指令（其他一律每次問）
 SAFE_ALWAYS = {"dir", "ls", "tree", "type", "cat", "more", "findstr", "find", "where", "echo", "whoami", "hostname",
-               "ver", "get-childitem", "gci", "get-content", "gc", "select-string", "sls", "fc", "comp"}
+               "ver", "get-childitem", "gci", "get-content", "gc", "select-string", "sls", "fc", "comp",
+               "get-process", "gps", "tasklist", "get-location", "pwd", "test-path", "get-item", "gi", "measure-object"}
+# 編譯器：只讀寫原始碼和產生執行檔，可以「永遠允許」；但 -wrapper、-fplugin、-B、@檔案 能讓編譯器執行別的程式，帶這些就不行
+COMPILERS = {"g++", "gcc", "c++", "cc", "clang", "clang++", "javac", "tsc", "rustc", "csc"}
+COMPILER_RISKY = ("-wrapper", "-fplugin", "-b", "@", "--plugin", "-specs")
 SAFE_GIT = {"status", "log", "diff", "show", "branch", "blame", "ls-files", "rev-parse", "describe", "tag"}
 SCRIPT_EXT = (".py", ".ps1", ".bat", ".cmd", ".js", ".mjs", ".ts", ".sh", ".rb", ".pl", ".vbs", ".jar")
 # 直譯器程式碼裡值得提醒的動作
@@ -255,12 +259,15 @@ def assess(tool, args, roots):
         bump("strict", f"一次串了 {len(segments)} 個指令", warn=True)
 
     res["program"] = progs[0] if progs else ""
+    res["segments"] = len(segments)
     if res["level"] == "pass":
         res["level"] = "ask"
     # 「永遠允許」只開放給唯讀指令；git 只開放看狀態的子指令，而且不能帶能改設定的參數
     if res["level"] == "ask" and len(segments) == 1:
         prog, rest = _program(segments[0])
         if prog in SAFE_ALWAYS:
+            res["key"] = prog
+        elif prog in COMPILERS and not any(r.lower().startswith(COMPILER_RISKY) for r in rest):
             res["key"] = prog
         elif prog == "git" and rest and rest[0].lower() in SAFE_GIT and not any(
                 r.lower().startswith(("-c", "--config", "--exec", "--git-dir", "--work-tree", "--ext-diff",
