@@ -761,7 +761,7 @@ async function runTurn(text, files, fork){
           const r = ev.result || {};
           if (r.response) reply = r.response;
           const u = r.usage || {};
-          a.meta.textContent = `${modelLabel(currentModel())} ·${st.elapsed().toFixed(1)} 秒 · ${u.total_tokens ?? "?"} tokens`;
+          a.meta.textContent = `${modelLabel(currentModel())} ·${st.elapsed().toFixed(1)} 秒 · ${(u.turn_tokens ?? u.total_tokens)?.toLocaleString() ?? "?"} tokens`;
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }

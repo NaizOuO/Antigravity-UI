@@ -931,6 +931,23 @@ def write_hist(h):
     write_transcript(h)
 
 
+TOKEN_TOTALS = DATA / "token_totals.json"
+TOKEN_LOCK = threading.Lock()
+
+
+def turn_tokens(cid, total):
+    """agy 回報的是對話累計 tokens；回傳這次比上次多用的量（第一次、或累計變小時就用整個值）。"""
+    with TOKEN_LOCK:
+        try:
+            totals = json.loads(TOKEN_TOTALS.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            totals = {}
+        prev = totals.get(cid, 0)
+        totals[cid] = total
+        TOKEN_TOTALS.write_text(json.dumps(totals), encoding="utf-8")
+    return total - prev if total >= prev else total
+
+
 def save_turn(cid, model, user_msg, reply, project=None):
     with HIST_LOCK:
         h = load_hist(cid) or {"id": cid, "title": (user_msg["text"] or "（附件）")[:40],
@@ -1556,6 +1573,10 @@ class Handler(BaseHTTPRequestHandler):
             if ev.get("event") == "result":
                 r = ev.get("result") or {}
                 new_cid = r.get("conversation_id") or new_cid
+                # agy 的 tokens 是整段對話的累計值：記下上次的累計，換算成這次用掉的量
+                u = r.get("usage") or {}
+                if new_cid and isinstance(u.get("total_tokens"), int):
+                    u["turn_tokens"] = turn_tokens(new_cid, u["total_tokens"])
                 reply = r.get("response") or reply
                 denied = [a.get("display_name") or a.get("action") for a in r.get("denied_actions") or []]
             emit(ev)
