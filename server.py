@@ -4,6 +4,7 @@
 介面上的文字 / 圖片 / 檔案 -> 以 `agy -p` 子程序執行 -> 把串流結果回傳到網頁。
 """
 import base64
+import glob
 import json
 import os
 import re
@@ -72,7 +73,8 @@ DEFAULT_SETTINGS = {
     "notify_sound": True,         # 回答完成時（視窗不在前面）播放提示音
     "notify_title": True,         # 回答完成時分頁標題提醒
     "latex_copy": True,           # 點公式複製 LaTeX 原始碼
-    "suggest_reply": True,        # 回答完預測使用者的下一句，輸入框按 Tab 採用（用 Gemini Flash）
+    "pdf_verify": True,           # PDF 編譯後把頁面轉成圖片讓模型檢查成品，有錯自動修正
+    "suggest_reply": True,       # 回答完預測使用者的下一句，輸入框按 Tab 採用（用 Gemini Flash）
     # 用量
     "quota_warn": 15,             # 目前模型的額度剩下低於幾 % 時提醒（0 = 不提醒）
     # 更新
@@ -129,7 +131,27 @@ def _looks_ours(folder):
     return any(m in head for m in OUR_MARKERS)
 
 
-def collect_images(cid, since):
+GENERAL_OUT = "一般對話"
+TYP_SRC = ".原始檔"                  # .typ 原始檔放在各輸出資料夾的這個隱藏子資料夾，資料夾裡只看得到 PDF
+
+
+def out_dir(pr, create=True):
+    """這段對話的輸出資料夾：output/<專案名稱>，不屬於專案的放 output/一般對話。"""
+    d = OUTPUT / (safe_name(pr["name"]).rstrip(". ") if pr else GENERAL_OUT)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def typ_dir(out):
+    d = out / TYP_SRC
+    if not d.exists():
+        d.mkdir(parents=True)
+        subprocess.run(["attrib", "+h", str(d)], creationflags=NO_WINDOW, capture_output=True)
+    return d
+
+
+def collect_images(cid, since, out):
     """這輪回答中 Nano Banana（agy 的生圖子代理）生成的圖片：搬到 output，回傳新路徑。
     agy 會把圖存在 brain/<對話>/ 下（使用者上傳與暫存的 .user_uploaded、.tempmediaStorage 不算）。"""
     p = brain_dir(cid)
@@ -140,9 +162,9 @@ def collect_images(cid, since):
         rel = f.relative_to(p).parts
         if (f.is_file() and f.suffix.lower() in IMAGE_EXTS and f.stat().st_mtime >= since - 2
                 and not any(part.startswith(".") for part in rel)):
-            dest, n = OUTPUT / f.name, 2
+            dest, n = out / f.name, 2
             while dest.exists():
-                dest = OUTPUT / f"{f.stem} ({n}){f.suffix}"
+                dest = out / f"{f.stem} ({n}){f.suffix}"
                 n += 1
             try:
                 import shutil
@@ -213,7 +235,35 @@ INSTALLING = {}                    # 元件 id -> 取消用的 Event
 
 
 def new_typ_files(since):
-    return sorted(p for p in OUTPUT.glob("*.typ") if p.stat().st_mtime >= since - 2)
+    """這輪新寫的 .typ（任何輸出資料夾）。模型若沒照指示直接存在輸出資料夾，先搬進隱藏的原始檔資料夾。"""
+    found = []
+    for p in OUTPUT.rglob("*.typ"):
+        if p.stat().st_mtime < since - 2:
+            continue
+        if p.parent.name != TYP_SRC:
+            dest = typ_dir(p.parent) / p.name
+            try:
+                p.replace(dest)
+                p = dest
+            except OSError:
+                pass
+        found.append(p)
+    return sorted(found)
+
+
+def tidy_output():
+    """舊版把 .typ 和 PDF 混在 output 最上層：把 .typ 收進隱藏的原始檔資料夾（PDF 等其他檔案不動）。"""
+    for p in OUTPUT.glob("*.typ"):
+        try:
+            p.replace(typ_dir(OUTPUT) / p.name)
+        except OSError:
+            pass
+
+
+def pdf_path(typ):
+    """原始檔在 <資料夾>/.原始檔/x.typ → PDF 放 <資料夾>/x.pdf。"""
+    typ = Path(typ)
+    return (typ.parent.parent if typ.parent.name == TYP_SRC else typ.parent) / (typ.stem + ".pdf")
 
 
 def compile_files(paths):
@@ -222,13 +272,13 @@ def compile_files(paths):
     for p in map(Path, paths):
         if p.suffix.lower() != ".typ" or not p.is_file() or not inside(p, OUTPUT):
             continue
-        ok, res = components.compile_typst(p)
+        ok, res = components.compile_typst(p, pdf_path(p))
         results.append({"typ": str(p), "name": p.name, "ok": ok,
                         **({"pdf": str(res), "pdf_name": Path(res).name} if ok else {"error": str(res)})})
     return results
 
 
-FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 你剛才寫的 {name} 用 Typst 編譯時發生錯誤。
+FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 你剛才寫的 {path} 用 Typst 編譯時發生錯誤。
 請直接修正同一個檔案（用 replace_file_content 或 write_to_file），不要執行任何指令。
 修正完只要回一句「已修正」，不需要其他說明。
 
@@ -239,7 +289,7 @@ FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 你剛才寫的 
 
 def fix_typst(cid, cwd, model, result):
     """在背景請模型依錯誤修正 .typ（同一段 agy 對話，但不出現在介面的對話裡）。"""
-    cmd = [agy_exe(), "-p", FIX_PROMPT.format(name=result["name"], error=result["error"][-2500:]),
+    cmd = [agy_exe(), "-p", FIX_PROMPT.format(path=result["typ"], error=result["error"][-2500:]),
            "--output-format", "json", "--conversation", cid,
            "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
     if model:
@@ -249,6 +299,63 @@ def fix_typst(cid, cwd, model, result):
                        creationflags=NO_WINDOW, timeout=600)
     except Exception:
         pass
+
+
+VERIFY_PROMPT = """你是排版校對員。使用者的要求是：
+<<<
+{request}
+>>>
+依這個要求產生的 {name} 已經編譯成 PDF，實際共 {pages} 頁，原始檔是 {typ}。
+不要相信 .typ 原始碼「看起來」的樣子，請用 view_file 逐一打開下面每一頁的圖片，檢查真正的成品：
+{images}
+
+檢查項目：
+1. 頁數與分頁是否符合使用者的要求（實際是 {pages} 頁；有要求頁數就要對得上，不能有多出來、幾乎空白或被擠到下一頁的內容）。
+2. 版面：模板、標題、表格、方框、圖片有沒有跑掉、重疊、超出頁面或被截斷。
+3. 公式：括號、上下標、分數的範圍有沒有放錯，符號是否正確顯示（不是原始碼文字）。
+4. 內容：有沒有錯字、漏掉的段落、物理或數學上的錯誤。
+
+有問題就直接修正 {typ}（用 replace_file_content 或 write_to_file），不要執行任何指令。
+最後只回一行：
+- 沒有問題：OK
+- 有修正：FIXED: <用一句繁體中文說明修了什麼>
+"""
+
+
+def verify_pdf(cwd, model, result, request):
+    """把 PDF 每頁轉成圖片，請模型看成品檢查；回傳 (是否有修改, 說明)。
+    用獨立的新對話（只附使用者的要求），不沿用原對話，避免把整段對話再送一次、浪費額度。"""
+    typ = Path(result["typ"])
+    shots = components.render_pages(typ, typ.parent / f".檢查_{typ.stem}")
+    if not shots:
+        return False, ""
+    prompt = VERIFY_PROMPT.format(name=result["pdf_name"], pages=len(shots), typ=typ, request=request[-3000:],
+                                  images="\n".join(str(p) for p in shots))
+    want = re.findall(r"(\d+)\s*頁", request)        # 使用者有指定頁數：程式直接比對，不靠模型自己發現
+    if len(set(want)) == 1 and int(want[0]) != len(shots):
+        prompt = (f"⚠ 頁數不符：使用者要求 {want[0]} 頁，實際編譯出來是 {len(shots)} 頁，一定要修正到 {want[0]} 頁。\n\n"
+                  + prompt)
+    cmd = [agy_exe(), "-p", prompt,
+           "--output-format", "json",
+           "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--mode", "accept-edits"]
+    if model:
+        cmd += ["--model", model]
+    before = typ.stat().st_mtime
+    try:
+        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             creationflags=NO_WINDOW, timeout=900).stdout
+        data = json.loads(out)
+        answer = (data.get("response") or "").strip()
+        if data.get("conversation_id"):
+            drop_brain(data["conversation_id"])
+    except Exception:
+        answer = ""
+    finally:
+        import shutil
+        shutil.rmtree(shots[0].parent, ignore_errors=True)
+    changed = typ.stat().st_mtime != before
+    note = answer.split("FIXED:", 1)[1].strip().splitlines()[0] if "FIXED:" in answer else ""
+    return changed, note
 
 
 def error_summary(error):
@@ -263,7 +370,7 @@ def pdf_links(results):
 
 
 # ---------- 匯出、備份、匯入 ----------
-def export_markdown(h):
+def export_markdown(h, out=OUTPUT):
     """把一段對話存成 Markdown 到 output 資料夾，回傳檔案路徑。"""
     fmt = lambda t: datetime.fromtimestamp(t or time.time()).strftime("%Y-%m-%d %H:%M")
     lines = [f"# {h.get('title') or '對話'}", "",
@@ -275,10 +382,10 @@ def export_markdown(h):
             lines.append("\n附件：" + "、".join(Path(f).name for f in m["files"]))
         lines.append("")
     name = safe_name(re.sub(r"\s+", " ", h.get("title") or "對話"))[:60]
-    dest = OUTPUT / f"{name}.md"
+    dest = out / f"{name}.md"
     n = 2
     while dest.exists():
-        dest = OUTPUT / f"{name} ({n}).md"
+        dest = out / f"{name} ({n}).md"
         n += 1
     dest.write_text("\n".join(lines), encoding="utf-8")
     return dest
@@ -395,6 +502,7 @@ BUILTIN_BG = [{"id": "wave", "name": "波的干涉"}, {"id": "contour", "name": 
 FOLDERS = {"output": OUTPUT, "images": BG_DIR, "setting": SETTING_DIR, "data": DATA, "agy": AGY_BRAIN}
 OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md、txt、csv、程式碼），請用 write_to_file 存到 {dir}\\ 資料夾，"
                "檔名取有意義的名字（可以用中文），完成後告訴使用者檔名。不要存到其他地方。"
+               "要產生 PDF 時，.typ 原始檔請存到 {dir}\\" + TYP_SRC + "\\ 資料夾（介面會把 PDF 編譯到 {dir}\\）。"
                "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
 
 # ---------- 桌面捷徑 ----------
@@ -1085,6 +1193,10 @@ class Handler(BaseHTTPRequestHandler):
             p = unquote(q.get("p", [""])[0])
             if p and inside(p, ROOT) and Path(p).is_file():
                 return self.send_file(p)
+            if p and inside(p, OUTPUT):             # 輸出檔案被整理到專案資料夾後，舊連結依檔名找
+                hit = next(OUTPUT.rglob(glob.escape(Path(p).name)), None)
+                if hit and hit.is_file():
+                    return self.send_file(hit)
             return self.send_json({"error": "not allowed"}, 404)
         self.send_json({"error": "not found"}, 404)
 
@@ -1181,7 +1293,7 @@ class Handler(BaseHTTPRequestHandler):
             h = load_hist(self.body().get("id", ""))
             if not h:
                 return self.send_json({"ok": False, "message": "找不到這段對話"})
-            dest = export_markdown(h)
+            dest = export_markdown(h, out_dir(load_project(h.get("project"))))
             return self.send_json({"ok": True, "name": dest.name, "path": str(dest)})
         if u.path == "/api/backup":
             dest = backup_all()
@@ -1277,6 +1389,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == "update":
             if isinstance(d.get("memory"), str) and len(d["memory"].strip()) > MEMORY_MAX:
                 return self.send_json({"ok": False, "message": f"專案記憶最多 {MEMORY_MAX} 字（目前 {len(d['memory'].strip())} 字），請刪減後再儲存。"})
+            old_out = out_dir(pr, create=False)
             for k in ("name", "instructions", "memory"):
                 if isinstance(d.get(k), str):
                     pr[k] = d[k].strip()[:60] if k == "name" else d[k]
@@ -1284,6 +1397,12 @@ class Handler(BaseHTTPRequestHandler):
                 pr["memory_auto"] = d["memory_auto"]
             if not pr["name"]:
                 pr["name"] = "未命名專案"
+            new_out = out_dir(pr, create=False)
+            if old_out != new_out and old_out.is_dir() and not new_out.exists():   # 專案改名：輸出資料夾跟著改
+                try:
+                    old_out.rename(new_out)
+                except OSError:
+                    pass
             save_project(pr)
             return self.send_json(pr)
         if action == "rebuild_memory":     # 用這個專案所有對話重新整理記憶（會等整理完才回應）
@@ -1348,7 +1467,7 @@ class Handler(BaseHTTPRequestHandler):
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
             if prior:
                 instructions += "\n\n" + history_block(prior)
-        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=OUTPUT)
+        extra_hint = (SEARCH_HINT if d.get("search") else "") + OUTPUT_HINT.format(dir=out_dir(pr))
         prompt = build_prompt(text + extra_hint, files, instructions,
                               project_block(pr, cid or (old and old["id"])) if pr else "")
         # agy 1.3.3 起讀工作區以外的檔案需要授權（非互動模式會直接拒絕），
@@ -1448,14 +1567,14 @@ class Handler(BaseHTTPRequestHandler):
         STOPPED.discard(run_id)
 
         # Nano Banana 生成的圖片：從 agy 的暫存搬到 output，直接接在回答後面顯示
-        images = collect_images(new_cid, started) if new_cid else []
+        images = collect_images(new_cid, started, out_dir(pr)) if new_cid else []
         if images:
             # 路徑要編碼：「AI sandbox」這種有空格的路徑會讓 Markdown 的圖片語法斷掉
             shown = "\n\n".join(f"![{p.stem}](file:///{quote(p.as_posix(), safe=':/')})" for p in images)
             names = "、".join(p.name for p in images)
             for p in images:      # 模型自己寫的圖片連結指向 agy 暫存（已經搬走）：拿掉，改用下面正確的
                 reply = re.sub(r"!\[[^\]]*\]\([^)]*" + re.escape(p.stem) + r"[^)]*\)\n?", "", reply)
-            reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到 output：{names}"
+            reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到 output／{out_dir(pr).name}：{names}"
             emit({"event": "images", "paths": [str(p) for p in images], "reply": reply})
         # PDF：這輪 AI 在 output 寫了 .typ → 有 Typst 就編譯；沒有就請介面詢問要不要下載
         typs = new_typ_files(started) if returncode == 0 else []
@@ -1463,7 +1582,7 @@ class Handler(BaseHTTPRequestHandler):
             results = compile_files(typs)
             fixed_notes = []
             # 編譯失敗：在背景請模型修正再重新編譯（最多 2 次），修正過程不顯示在對話裡
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):          # Typst 一次只回報一個錯誤，錯好幾處時要多修幾輪
                 failed = [r for r in results if not r["ok"]]
                 if not failed or not new_cid:
                     break
@@ -1475,6 +1594,24 @@ class Handler(BaseHTTPRequestHandler):
                     results[results.index(r)] = again
                     if again["ok"]:
                         fixed_notes.append(f"{r['name']} 第一次排版時有語法錯誤（{reason}），已自動修正後重新產生。")
+            # 看成品檢查：模型只讀 .typ 時看不出頁數、版面、括號位置等問題，所以把每頁轉成圖片給它看（最多 2 輪）
+            if new_cid and load_settings().get("pdf_verify", True):
+                for i, r in enumerate(results):
+                    if not r["ok"]:
+                        continue
+                    for attempt in (1, 2):
+                        emit({"event": "pdf_checking", "attempt": attempt, "name": r["pdf_name"]})
+                        backup = Path(r["typ"]).read_text(encoding="utf-8", errors="replace")
+                        changed, note = verify_pdf(cwd, model, r, text)
+                        if not changed:
+                            break
+                        again = compile_files([r["typ"]])[0]
+                        if not again["ok"]:              # 修正反而編譯失敗：還原原始檔，保留修正前的 PDF
+                            Path(r["typ"]).write_text(backup, encoding="utf-8")
+                            fixed_notes.append(f"檢查 {r['pdf_name']} 時嘗試修正但產生語法錯誤，保留修正前的版本。")
+                            break
+                        results[i] = r = again
+                        fixed_notes.append(f"檢查成品後修正了 {r['pdf_name']}：{note or '版面或內容的問題'}")
             links = pdf_links(results)
             if links:
                 reply = reply.rstrip() + "\n\n" + links
@@ -1482,8 +1619,8 @@ class Handler(BaseHTTPRequestHandler):
                 reply += "\n\n" + "\n".join(f"> ⚙ {n}" for n in fixed_notes)
             still = [r for r in results if not r["ok"]]
             if still:
-                reply += "\n\n" + "\n".join(f"> ⚠ {r['name']} 自動修正 2 次仍無法排版（{error_summary(r['error'])}），"
-                                            f".typ 原始檔在 output 資料夾，可以請我再修正一次。" for r in still)
+                reply += "\n\n" + "\n".join(f"> ⚠ {r['name']} 自動修正 3 次仍無法排版（{error_summary(r['error'])}），"
+                                            f".typ 原始檔在該輸出資料夾的 {TYP_SRC}，可以請我再修正一次。" for r in still)
             emit({"event": "pdf", "results": results, "reply": reply})
         elif typs:
             emit({"event": "need_component", "id": "typst", "info": components.status()["typst"],
@@ -1565,6 +1702,7 @@ def main():
     SERVER = srv
     threading.Thread(target=sync_transcripts, daemon=True).start()
     threading.Thread(target=sync_all_skills, daemon=True).start()
+    threading.Thread(target=tidy_output, daemon=True).start()
     threading.Thread(target=retitle_legacy, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()

@@ -273,3 +273,15 @@ def compile_typst(src, out=None):
     if r.returncode == 0 and out.exists():
         return True, out
     return False, (r.stderr or r.stdout or "未知的錯誤").strip()[-3000:]
+
+
+def render_pages(src, out_dir, ppi=72):
+    """把 .typ 的每一頁輸出成 PNG（給模型檢查成品用）。回傳依頁碼排序的圖片路徑。"""
+    import subprocess
+    src, out_dir = Path(src), Path(out_dir)
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True)
+    subprocess.run([str(typst_exe()), "compile", "--package-cache-path", str(typst_cache()),
+                    "--root", str(src.parent), "--ppi", str(ppi), str(src), str(out_dir / "page-{0p}.png")],
+                   capture_output=True, timeout=180, creationflags=0x08000000)
+    return sorted(out_dir.glob("page-*.png"))

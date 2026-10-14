@@ -1,12 +1,12 @@
 {
- "version": "1.4.2",
+ "version": "1.4.3",
  "files": {
-  "server.py": "3cd6caccba7a2bf078fd67e6b03d8bd02996d7936ce91c26c19b892af7267303",
-  "version.py": "c7732db4089668b056481f8643a566c01ce08299e2d643190be20ed60d638011",
+  "server.py": "25d86942ad98229a3bed03dc03bec5d0b2c0322bdbea1cd3bf572758ed03daeb",
+  "version.py": "3795271edb988c4d3127fa13ac5accc5d1980aa22dd9cf5fbaecc9e66a517775",
   "updater.py": "476821ba2c580d9aed31effc6b8e8501d145e9e30fc2332c23d85ec010539b72",
-  "components.py": "de84cad93ef081f812ddc1e567a9c1201fb52b7ddfbdcd104bfeb48d9d5786af",
-  "static/index.html": "0b18c99cbebe0a49cb37d5a6bbdeee3e8d6fa7b57f8d2f681b8562482077a8a3",
-  "skills/pdf-document/SKILL.md": "9bcd43d6631fd01e0d1ad58fbb12889d31d99ebbd2e220fc238f37289dc2dead",
+  "components.py": "17c40959014468ec61b68508074520a032c6306235f1a0a93e215b39b6c2662e",
+  "static/index.html": "70faccbf530bcb6626830fbe6fac6cc08123409c7a828090d9891662bbebceae",
+  "skills/pdf-document/SKILL.md": "98d94282a6505d2e3cae49d27a91fabd626978bf6318c21ff704666829450032",
   "skills/pdf-document/references/packages.md": "8cfcc31a24311ce8d2d0a5156582d47850e79b930e4af2119cf08ad7f156ab55",
   "skills/pdf-document/references/notes.typ": "131425f0434d34b48a7f1491518f991b54491b350ebc93e1acc03bcd8971739f",
   "skills/pdf-document/references/report.typ": "2e80e6cc0129d2e52f284b0315246e50c7b557b0a4b6a9faa6101288d1bf75ce",

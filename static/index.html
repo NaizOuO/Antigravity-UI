@@ -12,12 +12,12 @@
 <style>
 :root{
   --bg:#f7f7f5; --panel:#ffffff; --side:#efeee9; --text:#1d1d1b; --muted:#6b6b66;
-  --border:#dedcd5; --accent:#2f6fde; --accent-text:#fff; --user:#e6eefc; --code:#f1f0ec; --danger:#c43c3c;
+  --border:#dedcd5; --accent:#2f6fde; --accent-text:#fff; --user:#e6eefc; --code:#f1f0ec; --danger:#c43c3c; --link:#3d5f94;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --bg:#1b1b1d; --panel:#232326; --side:#18181a; --text:#e8e6e1; --muted:#9a9890;
-    --border:#38373a; --accent:#5b8cff; --accent-text:#fff; --user:#25324d; --code:#2c2c30; --danger:#ff6b6b;
+    --border:#38373a; --accent:#5b8cff; --accent-text:#fff; --user:#25324d; --code:#2c2c30; --danger:#ff6b6b; --link:#a9bde4;
   }
 }
 *{box-sizing:border-box}
@@ -143,6 +143,9 @@ body.busy .acts{display:none}
 .bubble blockquote{border-left:3px solid var(--border);margin:0;padding-left:12px;color:var(--muted)}
 .katex-display{overflow-x:auto;overflow-y:hidden;padding:4px 0}
 .meta{font-size:12px;color:var(--muted);margin-top:4px}
+.msg .bubble a{color:var(--link);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--link) 40%,transparent);text-underline-offset:3px}
+.msg .bubble a:hover{text-decoration-color:var(--link)}
+.msg .bubble a:visited{color:var(--link)}
 .err{color:var(--danger);white-space:pre-wrap;font-size:13px}
 .typing::after{content:"▍";animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
@@ -447,6 +450,8 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">回答完會在空白的輸入框顯示灰色的建議，按 Tab 就填進去；直接打字就會忽略。用 Gemini Flash 預測，額度很少。</p>
       <div class="srow"><b>點公式複製 LaTeX 原始碼</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="latex_copy"><i></i></label></div>
       <p class="note">點一下回答裡的公式，就會複製它的 LaTeX（例如 <code>$\langle x|\psi\rangle$</code>），可以直接貼到 Overleaf 或 Word。</p>
+      <div class="srow"><b>產生 PDF 後讓模型檢查成品</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="pdf_verify"><i></i></label></div>
+      <p class="note">PDF 編譯好後，把每一頁轉成圖片讓模型「看成品」：檢查頁數是否符合要求、版面有沒有跑掉、公式（例如括號位置）與內容有沒有錯，有問題就自動修正再重新產生。模型只看原始碼時常看不出這些問題。會多花一點時間與額度。</p>
     </section>
     <section data-title="用量">
       <h4>用量</h4>
@@ -524,9 +529,9 @@ function renderMd(src){
            .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => keep(t, false))
            .replace(/(^|[^\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g, (_, pre, t) => pre + keep(t, false));
   src = src.replace(/@@CODE(\d+)@@/g, (_, i) => codes[i]);
-  // 本機圖片（例如 Nano Banana 生成、存到 output 的圖）：在清理 HTML 前先換成伺服器網址（file: 會被 DOMPurify 拿掉）
-  src = src.replace(/!\[([^\]]*)\]\(file:\/\/\/([^)\s]+)\)/g, (_, alt, p) =>
-    `![${alt}](/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g, "\\"))})`);
+  // 本機圖片與檔案連結（Nano Banana 的圖、產生的 PDF）：在清理 HTML 前先換成伺服器網址（file: 會被 DOMPurify 拿掉）
+  src = src.replace(/(!?)\[([^\]]*)\]\(file:\/\/\/([^)\s]+)\)/g, (_, bang, alt, p) =>
+    `${bang}[${alt}](/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g, "\\"))})`);
   let html = DOMPurify.sanitize(marked.parse(src, {gfm:true, breaks:false}));
   html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
     const m = maths[i];
@@ -537,6 +542,7 @@ function renderMd(src){
   });
   // agy 回覆裡的 file:/// 連結改成走本機伺服器
   html = html.replace(/href="file:\/\/\/([^"]+)"/g, (_, p) => `href="/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g,'\\'))}" target="_blank"`);
+  html = html.replace(/<a href="\/api\/file\?p=/g, '<a target="_blank" href="/api/file?p=');
   html = html.replace(/<img ([^>]*?)src="\/api\/file\?p=/g, '<img class="genimg" $1src="/api/file?p=');
   return html;
 }
@@ -678,12 +684,16 @@ function startEdit(uEl){
 function startStatus(a){
   const t0 = Date.now();
   let phase = "啟動 CLI 中";
-  const paint = () => { a.status.innerHTML = `<span class="spin"></span>${escapeHtml(phase)}… ${Math.floor((Date.now() - t0) / 1000)} 秒`; };
+  // 轉圈只建立一次，每秒只更新文字，動畫才不會每秒重來
+  a.status.innerHTML = `<span class="spin"></span><span class="stxt"></span>`;
+  const txt = a.status.querySelector(".stxt");
+  const paint = () => { txt.textContent = `${phase}… ${Math.floor((Date.now() - t0) / 1000)} 秒`; };
   a.status.hidden = false; paint();
   const timer = setInterval(paint, 1000);
   return {
     set(p){ phase = p; a.status.hidden = false; paint(); },
     hide(){ a.status.hidden = true; },
+    elapsed: () => (Date.now() - t0) / 1000,
     end(){ clearInterval(timer); a.status.remove(); }
   };
 }
@@ -751,11 +761,12 @@ async function runTurn(text, files, fork){
           const r = ev.result || {};
           if (r.response) reply = r.response;
           const u = r.usage || {};
-          a.meta.textContent = `${modelLabel(currentModel())} ·${(r.duration_seconds||0).toFixed(1)} 秒 · ${u.total_tokens ?? "?"} tokens`;
+          a.meta.textContent = `${modelLabel(currentModel())} ·${st.elapsed().toFixed(1)} 秒 · ${u.total_tokens ?? "?"} tokens`;
         }
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
         if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component") needComp = ev;
         if (ev.event === "done"){
