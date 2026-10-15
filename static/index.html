@@ -272,6 +272,10 @@ body.area-code .chatonly{display:none}
 .wsgroup{margin-bottom:6px}
 .wshead span{font-weight:600}
 .wsitem{padding-left:26px !important;font-size:13px}
+.msg.user .umd{white-space:normal}
+.msg.user .umd p{margin:0 0 6px}
+.msg.user .umd pre{text-align:left}
+.msg.user .umd ul,.msg.user .umd ol{margin:4px 0;padding-left:22px;text-align:left}
 .cpbox{font-size:12.5px;color:var(--muted);margin:6px 0}
 .cpbox summary{cursor:pointer;display:flex;align-items:center;gap:8px}
 .cpbox .cprestore{font-size:12px;padding:2px 8px}
@@ -691,7 +695,9 @@ function paintOutlineActive(){
 }
 
 function fillUserBubble(b, text, files){
-  b.textContent = text;
+  // 有 Markdown 語法（``` 清單 標題 引用）才排版，一般文字照原樣（保留換行）
+  if (/^\s*(```|[-*+] |\d+[.)] |#{1,6} |> )/m.test(text || "")){ b.innerHTML = `<div class="umd">${renderMd(text)}</div>`; }
+  else b.textContent = text;
   for (const f of files || []){
     if (isImg(f)){ const i = document.createElement("img"); i.className = "thumb"; i.src = fileUrl(f); b.appendChild(i); }
     else { const t = document.createElement("a"); t.className = "filetag"; t.href = fileUrl(f); t.target = "_blank"; t.textContent = "📄 " + baseName(f); b.appendChild(t); }
@@ -982,11 +988,64 @@ $("#input").addEventListener("keydown", e => {
     $("#input").value = suggestion; clearSuggestion(); autoGrow();
     return;
   }
+  if (e.key === "Tab" && !e.isComposing && mdIndent(e.shiftKey)){ e.preventDefault(); return; }   // 清單縮排
   if (e.key !== "Enter" || e.isComposing) return;
+  const inFence = mdInFence();
   if (savedPrefs.send_key === "ctrl_enter"){           // Ctrl+Enter 送出，Enter 換行
     if (e.ctrlKey || e.metaKey){ e.preventDefault(); send(); }
-  } else if (!e.shiftKey){ e.preventDefault(); send(); }
+    else { e.preventDefault(); mdNewline(); }
+  } else if (e.shiftKey || inFence || mdFenceOpener()){  // 在 ``` 程式碼區塊裡，Enter 是換行不是送出（像 Claude）
+    e.preventDefault(); mdNewline();
+  } else { e.preventDefault(); send(); }
 });
+/* ---------- 輸入框的 Markdown 輔助（像 Claude）：清單自動接續、``` 自動補上結尾、Tab 縮排 ---------- */
+function mdCaretLine(){
+  const t = $("#input"), pos = t.selectionStart, v = t.value;
+  const start = v.lastIndexOf("\n", pos - 1) + 1;
+  return {t, pos, v, start, line: v.slice(start, pos)};
+}
+function mdInsert(t, from, to, text, caret){
+  t.setRangeText(text, from, to, "end");
+  if (caret !== undefined) t.selectionStart = t.selectionEnd = caret;
+  autoGrow();
+}
+// 游標前面的 ``` 是奇數個：在還沒結束的程式碼區塊裡
+function mdInFence(){
+  const {v, start} = mdCaretLine();
+  return ((v.slice(0, start).match(/^\s*```/gm) || []).length % 2) === 1;
+}
+// 這一行只有 ```（可以帶語言），而且後面還沒有結尾的 ```
+const mdFenceOpener = () => { const {line} = mdCaretLine(); return /^\s*```[\w+-]*\s*$/.test(line) && !mdInFence(); };
+function mdNewline(){
+  const {t, pos, v, start, line} = mdCaretLine();
+  if (t.selectionStart !== t.selectionEnd) return mdInsert(t, t.selectionStart, t.selectionEnd, "\n");
+  if (mdFenceOpener()){                          // ```python + Enter：補上結尾，游標放中間
+    const ind = line.match(/^\s*/)[0];
+    return mdInsert(t, pos, pos, "\n" + ind + "\n" + ind + "```", pos + 1 + ind.length);
+  }
+  if (!mdInFence()){
+    const m = line.match(/^(\s*)([-*+]|(\d+)([.)]))\s+(\[[ xX]\]\s+)?(.*)$/);
+    if (m){
+      if (!m[6].trim() && !m[5]) return mdInsert(t, start, pos, "");     // 空的項目再按一次：結束清單
+      const marker = m[3] ? `${+m[3] + 1}${m[4]}` : m[2];
+      return mdInsert(t, pos, pos, `\n${m[1]}${marker} ${m[5] ? "[ ] " : ""}`);
+    }
+    const q = line.match(/^(\s*>\s?)(.*)$/);                             // 引用 > 也接續
+    if (q) return q[2].trim() ? mdInsert(t, pos, pos, "\n" + q[1]) : mdInsert(t, start, pos, "");
+  }
+  mdInsert(t, pos, pos, "\n");
+}
+function mdIndent(out){
+  const {t, start, line} = mdCaretLine();
+  if (suggestion && !t.value) return false;      // 讓 Tab 採用預測的回覆
+  if (!/^\s*([-*+]|\d+[.)])\s/.test(line) && !mdInFence()) return false;
+  const pos = t.selectionStart;
+  if (out){
+    const n = Math.min(2, (line.match(/^ */) || [""])[0].length);
+    if (n) mdInsert(t, start, start + n, "", pos - n);
+  } else mdInsert(t, start, start, "  ", pos + 2);
+  return true;
+}
 $("#send").onclick = send;
 
 /* ---------- models / settings ---------- */

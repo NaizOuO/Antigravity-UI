@@ -239,7 +239,9 @@ def desktop_windows(hdesk, pids, title_prefix):
         u.GetWindowThreadProcessId(h, ctypes.byref(pid))
         buf = ctypes.create_unicode_buffer(512)
         u.GetWindowTextW(h, buf, 512)
-        if u.IsWindowVisible(h) and (pid.value in pids or buf.value.startswith(title_prefix)):
+        # 隱藏桌面是 Lumina 專用的：上面看得到的視窗都是這次啟動的程式（Python 虛擬環境會透過轉接程式再啟動，
+        # 父子關係會斷掉、pygame 也會改標題，所以不能只靠 pid 或標題找）
+        if u.IsWindowVisible(h) and (pids is None or pid.value in pids or buf.value.startswith(title_prefix)):
             r = W.RECT()
             u.GetWindowRect(h, ctypes.byref(r))
             if r.right - r.left > 50 and r.bottom - r.top > 50:
@@ -311,11 +313,12 @@ def t_run_capture(a):
     secs = min(15.0, max(1.0, float(a.get("seconds") or 3)))
     tag = "LUMINA-" + uuid.uuid4().hex[:6]
     ctypes.windll.user32.SetProcessDPIAware()
+    rel = str(prog.relative_to(work))                   # 在工作資料夾裡執行，用相對路徑（避免引號和外層引號黏在一起被 cmd 解析錯）
     if prog.suffix.lower() == ".py":
         venv_py = work / ".venv" / "Scripts" / "python.exe"
-        cmdline = subprocess.list2cmdline([str(venv_py if venv_py.exists() else Path(sys.executable)), str(prog)] + args)
+        cmdline = subprocess.list2cmdline([str(venv_py if venv_py.exists() else Path(sys.executable)), rel] + args)
     else:
-        cmdline = subprocess.list2cmdline([str(prog)] + args)
+        cmdline = subprocess.list2cmdline([".\\" + rel] + args)
     # 用 conhost 開一個傳統的主控台視窗（不交給 Windows Terminal），標題設成 tag 方便找到這個視窗
     inner = f'title {tag}' + (" & chcp 65001>nul" if a.get("utf8") else "") + f" & {cmdline}"
     result = {}
@@ -323,14 +326,14 @@ def t_run_capture(a):
     def work_on_hidden_desktop():
         hdesk = hidden_desktop()
         ctypes.windll.user32.SetThreadDesktop(ctypes.c_void_p(hdesk))
-        pid = start_on_desktop(subprocess.list2cmdline(["conhost.exe", "cmd.exe", "/d", "/c", inner]), work)
+        pid = start_on_desktop(f'conhost.exe cmd.exe /d /s /c "{inner} "', work)   # /s：保留路徑裡的引號（有空格的資料夾）
         result["pid"] = pid
         wins = []
         try:
             if a.get("input"):                          # 需要鍵盤輸入：等視窗出來，一個字一個字打進去（視窗訊息，不動使用者的鍵盤）
                 for _ in range(30):
                     time.sleep(0.2)
-                    wins = desktop_windows(hdesk, process_tree(pid), tag)
+                    wins = desktop_windows(hdesk, None, tag)
                     if wins:
                         break
                 time.sleep(0.5)
@@ -339,8 +342,8 @@ def t_run_capture(a):
                         ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hw), 0x0102, 13 if ch == "\n" else ord(ch), 0)
                         time.sleep(0.05)
             time.sleep(secs)
-            alive = _alive(pid)
-            wins = desktop_windows(hdesk, process_tree(pid), tag)
+            alive = _alive(pid) or bool(desktop_windows(hdesk, None, tag))
+            wins = desktop_windows(hdesk, None, tag)
             SHOTS.mkdir(parents=True, exist_ok=True)
             shots = []
             for i, hw in enumerate(wins[:3]):
@@ -351,7 +354,15 @@ def t_run_capture(a):
         except Exception as e:
             result["error"] = e
         finally:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+            # 關掉這次啟動的程式：原本的程序樹，加上隱藏桌面上所有視窗的擁有者（轉接程式另外啟動的那個）
+            import ctypes.wintypes as W
+            owners = {pid}
+            for hw in desktop_windows(hdesk, None, tag):
+                o = W.DWORD()
+                ctypes.windll.user32.GetWindowThreadProcessId(ctypes.c_void_p(hw), ctypes.byref(o))
+                owners.add(o.value)
+            for o in owners:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(o)], capture_output=True, creationflags=0x08000000)
     t = threading.Thread(target=work_on_hidden_desktop)
     t.start(); t.join(secs + 30)
     if "error" in result:
