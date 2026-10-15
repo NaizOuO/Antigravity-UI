@@ -1184,6 +1184,55 @@ def ws_dir(ws):
     return str(d.resolve()) if d.is_absolute() and d.is_dir() else None
 
 
+TOOL_VERSIONS = {}           # 編譯器版本很少變：查一次就記住
+
+
+def _tool_version(cmd):
+    if cmd not in TOOL_VERSIONS:
+        import shutil
+        exe = shutil.which(cmd)
+        ver = ""
+        if exe:
+            try:
+                out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                     creationflags=NO_WINDOW, timeout=10)
+                ver = ((out.stdout or out.stderr).strip().splitlines() or [""])[0][:80]
+            except Exception:
+                ver = "（有安裝）"
+        TOOL_VERSIONS[cmd] = ver
+    return TOOL_VERSIONS[cmd]
+
+
+def env_block(ws):
+    """Code 區新工作階段開頭附上的環境資訊（參考 Claude Code）：模型不用自己一項項去查版本、套件、字型、檔案。"""
+    import platform
+    d = Path(ws_dir(ws) or "")
+    lines = [f"- 作業系統：Windows {platform.release()}；run_command 執行的是 PowerShell（用 PowerShell 語法，不是 bash）",
+             f"- 工作資料夾：{d}"]
+    venv = d / ".venv"
+    if (venv / "Scripts" / "python.exe").exists():
+        site = venv / "Lib" / "site-packages"
+        pkgs = sorted({p.name.split("-")[0] for p in site.glob("*.dist-info")}) if site.is_dir() else []
+        lines.append(f"- Python 虛擬環境：已有 .venv（執行用 .venv\\Scripts\\python）；已安裝：{', '.join(pkgs[:40]) or '（沒有其他套件）'}")
+    else:
+        lines.append(f"- Python：{platform.python_version()}；還沒有 .venv（要裝套件時先用 venv_create）")
+    if sys.version_info >= (3, 14):
+        lines.append("- 注意：這台電腦的 Python 很新，pygame 還沒有對應版本，要用 pygame-ce（相容的版本，程式裡一樣 import pygame）")
+    tools = [f"{c}（{v}）" for c in ("g++", "gcc", "node", "java", "git") if (v := _tool_version(c))]
+    lines.append("- 可用的工具：" + ("、".join(tools) if tools else "沒有偵測到編譯器"))
+    fonts = [f for f in (r"C:\Windows\Fonts\msjh.ttc", r"C:\Windows\Fonts\mingliu.ttc") if Path(f).exists()]
+    if fonts:
+        lines.append(f"- 中文字型：{'、'.join(fonts)}（程式要顯示中文時直接用這個路徑）")
+    try:
+        items = sorted(p for p in d.iterdir() if p.name not in (".venv", "__pycache__", ".git"))
+        shown = [f"{p.name}/" if p.is_dir() else f"{p.name}（{p.stat().st_size // 1024 + 1} KB）" for p in items[:40]]
+        lines.append("- 資料夾裡的檔案：" + ("、".join(shown) if shown else "（空的，新專案）")
+                     + ("……" if len(items) > 40 else ""))
+    except OSError:
+        pass
+    return "\n\n[環境資訊] 以下是目前的環境，已經確認過，不需要再用指令查詢：\n" + "\n".join(lines)
+
+
 def lumina_memory(ws):
     """LUMINA.md 的內容（由 Lumina 自己放進新工作階段的開頭，不靠各模型各自找 GEMINI.md／CLAUDE.md，換模型也一樣）。"""
     d = ws_dir(ws)
@@ -2255,6 +2304,8 @@ class Handler(BaseHTTPRequestHandler):
             if pr and pr.get("memory", "").strip():
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
                                  f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
+            if ws and ws_dir(ws):
+                instructions += env_block(ws)
             mem = lumina_memory(ws) if ws else ""
             if mem:
                 instructions += LUMINA_HINT.format(path=Path(ws_dir(ws)) / LUMINA_MD, content=mem)
