@@ -40,6 +40,14 @@ button{cursor:pointer}
 #newBtn{width:100%;padding:9px;border:1px solid var(--border);background:var(--panel);border-radius:8px}
 #newBtn:hover{border-color:var(--accent)}
 #hist{flex:1;overflow:auto;padding:0 8px 12px}
+#codeTree{flex:1;min-height:0;overflow-y:auto}
+/* 細捲軸：平常幾乎看不到，滑過才明顯 */
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--muted, #888) 35%,transparent) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted, #888) 30%,transparent);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,var(--muted, #888) 60%,transparent)}
+::-webkit-scrollbar-corner{background:transparent}
 .hitem{display:flex;align-items:center;gap:4px;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:14px}
 .hitem:hover{background:var(--panel)}
 .hitem.active{background:var(--panel);font-weight:600}

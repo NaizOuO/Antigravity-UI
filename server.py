@@ -518,6 +518,14 @@ def mcp_assess(args, run, work, cid):
         log_perm({"tool": "lumina." + name, "command": str(a.get("file") or ""), "cid": cid, "level": "builtin",
                   "decision": "auto_approve", "note": "內建工具"})
         return {"decision": "auto_approve"}
+    if name in ("todo_write", "design_review"):    # 任務清單、檢查清單：只是記錄或讀說明，不用詢問
+        return {"decision": "auto_approve"} if work else {"decision": "deny", "reason": "todo_write 只能在 Lumina Code 使用。"}
+    if name == "acceptance_set":             # 登記後每次回答結束會自動執行，所以要讓使用者看過
+        if not work:
+            return {"decision": "deny", "reason": "acceptance_set 只能在 Lumina Code 使用。"}
+        return {"a": risk("strict", ["之後每次回答結束，介面會自動執行這個指令檢查程式（測試檔被改過就不會自動執行）"],
+                          program="acceptance_set"),
+                "command": f"設定驗收指令：{a.get('command', '')}"}
     if name in ("run_capture", "venv_create", "venv_install") and not work:
         return {"decision": "deny", "reason": f"{name} 只能在 Lumina Code 的工作資料夾裡使用。請直接回答使用者；"
                                               "需要執行程式時，告訴使用者切到左上角的「Code」區。"}
@@ -525,7 +533,9 @@ def mcp_assess(args, run, work, cid):
         extra = " ".join(map(str, a.get("args") or []))
         typed = f"，先輸入 {json.dumps(a['input'], ensure_ascii=False)}" if a.get("input") else ""
         return {"a": risk("strict", ["會在螢幕上開一個視窗執行這個程式幾秒，截下那個視窗的畫面後自動關閉"], program="run_capture"),
-                "command": f"執行並截圖：{a.get('program', '')} {extra}".strip() + f"（{a.get('seconds') or 3} 秒{typed}）"}
+                "command": f"執行並截圖：{a.get('program', '')} {extra}".strip() +
+                           (f"（操作：{'、'.join(map(str, a['actions']))[:160]}）" if a.get("actions") else
+                            f"（{a.get('seconds') or 3} 秒{typed}）")}
     if name == "venv_create":
         return {"a": risk("ask", ["在工作資料夾建立 Python 虛擬環境 .venv"], key="lumina venv_create", program="venv_create"),
                 "command": "建立 Python 虛擬環境：.venv"}
@@ -734,8 +744,8 @@ def check_code(path):
     return "" if r.returncode == 0 else (r.stderr or r.stdout or "編譯失敗").strip()[-2500:]
 
 
-def fix_code(cid, cwd, model, path, error, work_dir):
-    cmd = [agy_exe(), "-p", CODE_FIX_PROMPT.format(path=path, error=error), "--output-format", "json",
+def fix_code(cid, cwd, model, path, error, work_dir, prompt=None):
+    cmd = [agy_exe(), "-p", prompt or CODE_FIX_PROMPT.format(path=path, error=error), "--output-format", "json",
            "--conversation", cid, "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT), "--add-dir", work_dir,
            "--mode", "accept-edits"] + (["--model", model] if model else [])
     try:
@@ -743,6 +753,37 @@ def fix_code(cid, cwd, model, path, error, work_dir):
                        creationflags=NO_WINDOW, timeout=600)
     except Exception:
         pass
+
+
+ACCEPT_FIX_PROMPT = """[介面自動訊息，不是使用者說的話] 介面重新執行了你登記的驗收指令，沒有通過：
+{command}
+
+輸出（最後一段）：
+{output}
+
+請找出原因修正程式（不要為了通過而放寬驗收測試），修正後自己再跑一次驗收確認通過，最後用一兩句說明修了什麼。
+"""
+
+
+def run_acceptance(work_dir):
+    """跑使用者核准過的驗收指令：回傳 None（沒有登記或不能自動跑）、(True, 輸出) 或 (False, 輸出)。
+    測試檔的內容跟核准時不同就不跑（避免核准後被換成別的程式，也避免模型為了通過偷改測試）。"""
+    import hashlib
+    f = Path(work_dir) / ".agents" / "lumina_acceptance.json"
+    try:
+        acc = json.loads(f.read_text(encoding="utf-8"))
+        for rel, h in acc["files"].items():
+            if hashlib.sha1((Path(work_dir) / rel).read_bytes()).hexdigest() != h:
+                return False, f"驗收測試 {rel} 在核准後被修改過，介面沒有自動執行。要改測試請重新用 acceptance_set 登記。"
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        r = subprocess.run(acc["command"], cwd=work_dir, shell=True, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", creationflags=NO_WINDOW, timeout=600,
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8", "SDL_VIDEODRIVER": "dummy"})
+    except subprocess.TimeoutExpired:
+        return False, "驗收指令超過 10 分鐘沒有結束（可能在等輸入或開了視窗）。驗收測試要能自己跑完結束。"
+    return r.returncode == 0, (r.stdout + r.stderr).strip()[-2500:]
 
 
 def error_summary(error):
@@ -901,9 +942,21 @@ WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。
              "能一個指令做完就不要用 ; 串好幾個指令（使用者要逐一確認）。"
              "有畫面的程式（主控台繪圖、視窗程式）用 run_capture 執行並截圖確認。"
              "完成的標準：程式編譯或執行沒有錯誤，而且你實際看過執行結果；回答最後用一兩句說明你驗證了什麼、結果如何。"
+             "要做的事有三步以上、或使用者一次提了好幾個問題時，先用 todo_write 列出任務清單，每項驗證過才勾掉。"
+             "修 bug、加功能時，改程式之前先寫驗收測試並用 acceptance_set 登記（做法寫在工具說明裡）。"
+             "驗收測試除了測個別函式，還要實際跑一段完整流程（例如遊戲：模擬按方向鍵幾秒，確認角色真的移動、敵人真的在動、不會卡住）。"
+             "遊戲和有視窗的程式，完成前一定要用 run_capture 的 actions 實際操作（按鍵、等待、截圖），"
+             "逐張比較截圖確認操作有反應；只截開場畫面不算驗證過。"
+             "新做一個程式或加大功能時：開工前先想使用者真正想要的成品是什麼樣子，用 design_review（phase=plan）"
+             "把需求展開成完整規格寫進 todo_write（包含使用者沒說、但這類成品應該要有的東西）；"
+             "說完成之前再用 design_review（phase=review）審查缺了什麼、哪裡設計不好、什麼操作會出事，"
+             "清單上這類成品該有的東西都屬於這次的工作，缺了就補；"
+             "只有明顯超出這個成品的新方向，才寫在回答最後的「建議（尚未執行）」。"
+             "只做使用者要求或明顯必要的事：對外或難以復原的動作（建立 repo、上傳、發布、刪除檔案、安裝大型軟體）"
+             "沒有被要求就不要做，改成建議。"
              "Python 專案要安裝套件時先 venv_create，再用 venv_install，執行用 .venv\\Scripts\\python。")
 TOOLS_HINT = ("\n\n[內建工具] 這個介面提供 lumina 工具（pdf_info、pdf_find、pdf_text、pdf_page、pdf_thumbs；Code 區另有 run_capture、"
-              "venv_create、venv_install），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
+              "venv_create、venv_install、todo_write、acceptance_set、design_review），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
               "先看對話前文和附件裡有沒有需要的內容，有就不要重查。看不到這些工具時，可以改用終端機指令 "
               "lumina pdf-info \"檔案\"（pdf-find、pdf-text、pdf-page、pdf-thumbs 同理）。")
 
@@ -2539,6 +2592,18 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     emit({"event": "code_fixing", "attempt": attempt + 1, "name": f.name})
                     fix_code(new_cid, cwd, model, f, err, work_dir)
+            # 驗收：有登記驗收指令、這輪又改了檔案，就由介面重跑一次（不採信模型自己說通過），沒過交回去修
+            acc = run_acceptance(work_dir) if touched else None
+            for attempt in (1, 2):
+                if acc is None or acc[0] or "被修改過" in acc[1]:
+                    break
+                emit({"event": "code_fixing", "attempt": attempt, "name": "驗收測試"})
+                fix_code(new_cid, cwd, model, None, None, work_dir,
+                         prompt=ACCEPT_FIX_PROMPT.format(command="（登記的驗收指令）", output=acc[1]))
+                acc = run_acceptance(work_dir)
+            if acc is not None:
+                notes.append("> ✅ 介面重新執行驗收測試：通過。" if acc[0] else
+                             f"> ⚠ 驗收測試沒有通過：{(acc[1].strip().splitlines() or [''])[-1][:200]}")
             if notes:
                 reply = reply.rstrip() + "\n\n" + "\n".join(notes)
                 emit({"event": "pdf", "results": [], "reply": reply})

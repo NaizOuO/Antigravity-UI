@@ -67,6 +67,68 @@
 
 `data/`、`output/`、`setting/`、`components/` 都不會進版本控制、不會被打包，也不會被更新覆蓋。
 
+## 給 AI 協作：Claude Code 派工給 Lumina Code
+
+> **給 AI 模型**：使用者要你「交給 Lumina 做」「跟 Lumina 分工」時讀這一節。
+> Lumina Code 用的是 Antigravity 的額度（跟 Claude Code 分開），適合接手大量實作；判斷、規劃、驗收留給你自己。
+
+### 1. Lumina Code 能做什麼
+
+Lumina Code 是 agy（Gemini 等模型）在一個工作資料夾裡寫程式、執行指令的環境。除了一般的讀寫檔、終端機，還有這些工具（說明都寫在工具裡）：
+
+| 工具 | 用途 |
+|---|---|
+| `todo_write` | 任務清單；標成完成時必須寫出怎麼驗證的 |
+| `acceptance_set` | 登記驗收指令；每次回答結束，介面會自己重跑，沒過就交回去修。測試檔在核准後被改過就不會自動執行 |
+| `design_review` | 依程式類型（遊戲、工具、網頁、命令列）給檢查清單：開工前展開規格、完成前審查缺漏 |
+| `run_capture` | 在隱藏桌面執行程式並截圖；`actions` 可以按鍵、等待、截圖，實際「玩」遊戲或操作視窗程式（不出聲、不佔使用者螢幕） |
+| `venv_create`、`venv_install` | Python 虛擬環境 |
+| `pdf_*` | 讀 PDF |
+
+### 2. 怎麼派工
+
+介面伺服器要開著（`啟動.vbs`，http://127.0.0.1:8765）。用 `dev/delegate.py`：
+
+```
+python dev/delegate.py "<工作資料夾>" --task "要做什麼" [--task-file 規格.md] \
+    [--test "python acceptance_test.py ."] [--keep "不能改的介面或檔案"] [--model gemini-3.8-flash-high] [--rounds 2]
+```
+
+- 會自動在工作資料夾建立 Lumina Code 工作區，送出任務，權限詢問自動回答（「這段對話都允許」或「允許一次」）。
+- 做完後 **delegate.py 自己重跑 `--test`**（不採信模型說的）；沒過就把失敗輸出交回同一段對話再修，最多 `--rounds` 輪。
+- 最後印出 JSON 報告：`passed`、`changed`／`added`／`deleted`（實際比對檔案，不是模型說的）、`final_reply`、時間、tokens、詢問次數、`conversation`。
+- `final_reply` 固定四段：①改了哪些檔案 ②怎麼驗證的 ③還沒解決的地方 ④**建議（尚未執行）**——Lumina 對設計的意見，給你參考，由你和使用者決定要不要做。
+- 想自己寫程式呼叫：`POST /api/code/create {"work_dir": ...}` 建立工作區，`POST /api/chat {"text", "model", "code": 工作區 id, "conversation_id"?}`
+  回傳一行一個 JSON 事件；`permission` 事件要用 `POST /api/permission/answer {"id", "nonce", "choice"}` 回答（`once`／`conv`／`deny`）。
+  請求都要帶 `Origin: http://127.0.0.1:8765`。
+
+### 3. 怎麼分工（實驗得到的結論）
+
+同一個 Gemini Flash，自己規劃的 Pac-Man 自動評分 12/18；拿到 Claude 寫的規格書和驗收測試後是 21/21。
+**差別在「需求想得夠不夠周全」，不在寫程式的能力**，所以：
+
+| 你（Claude Code） | Lumina |
+|---|---|
+| 判斷使用者真正要什麼、寫規格書（含使用者沒說但該有的東西） | 照規格實作、反覆修到測試通過 |
+| 寫驗收測試（含「不應該發生」的情況、實際跑一段流程） | 用 `run_capture` 的 `actions` 實際操作確認 |
+| 最後驗收：自己重跑測試、看截圖、讀「建議」 | 回報做了什麼、怎麼驗證、還缺什麼 |
+
+- **直接自己做比較好的情況**：小而關鍵、需要判斷力的修改（例如修 Lumina 本身）；寫規格加驗收測試的力氣超過直接做的一半時。
+- **派工比較划算的情況**：實作量遠大於規格（完整的遊戲、大量重複修改、要跑很多測試）。
+- 派工不保證省 Claude 的用量：品質不夠時，讀程式、找 bug、重新說明反而更花。
+- **界線**：只讓 Lumina 做被要求或明顯必要的事；建立 repo、上傳、發布、刪檔、安裝大型軟體一律不派、不自動允許，先問使用者。
+
+### 4. 額度
+
+`GET /api/usage` 回傳 Antigravity 的兩個額度池（`remaining_fraction` 是剩下的比例、`reset_time` 重置時間）：
+
+| 額度池 | 模型 | 注意 |
+|---|---|---|
+| Gemini Models | `gemini-3.8-flash-high` 等 | 預設用這個。一個中型遊戲大約 20～50 萬 tokens |
+| Claude and GPT models | `claude-sonnet-4-6`、`claude-opus-4-6-thinking` | 額度很少、燒得很快（一題 Pac-Man 沒做完就用完 5 小時額度）；使用者同意才用，用前先查剩多少 |
+
+派工前先查額度；剩不到 20% 時告訴使用者，不要硬跑到被鎖。
+
 ## 發布新版（開發者）
 ```
 python release.py 1.1.0 "更新內容第一行" "第二行"

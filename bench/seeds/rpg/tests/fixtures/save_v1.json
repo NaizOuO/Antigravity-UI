@@ -1,0 +1,9 @@
+{
+ "version": 1,
+ "player": {
+  "name": "老玩家", "level": 3, "xp": 60, "hp": 41,
+  "base": {"max_hp": 56, "atk": 12, "defense": 5, "agi": 7, "luck": 2},
+  "inventory": {"slots": [["potion", 4], ["wolf_pelt", 3], ["herb", 2]], "gold": 132, "max_slots": 20},
+  "equipped": ["iron_sword", "leather_armor"]
+ }
+}

@@ -67,6 +67,12 @@ TOOLS = [
          "args": {"type": "array", "items": {"type": "string"}, "description": "傳給程式的參數"},
          "seconds": {"type": "number", "description": "執行多久後截圖（1～15 秒，預設 3）"},
          "utf8": {"type": "boolean", "description": "主控台程式要不要先切成 UTF-8（chcp 65001）。預設 false＝跟使用者平常執行的環境一樣"},
+         "actions": {"type": "array", "items": {"type": "string"}, "description":
+             "實際操作程式（遊戲、視窗程式）的腳本，一行一個動作，照順序做：「wait 秒數」等待、「shot 名稱」截圖、"
+             "「hold 按鍵 秒數」按住（例如 hold right 1.5、hold up+left 0.5）、「press 按鍵」按一下。"
+             "按鍵：left right up down space enter esc tab shift ctrl a~z 0~9。"
+             "用來確認操作真的有反應：例如 shot 開始 → hold right 1 → shot 往右後，比較兩張截圖角色有沒有移動。"
+             "有 actions 時 seconds 不用給（腳本做完就關閉）。"},
          "input": {"type": "string", "description": "程式需要鍵盤輸入時，先準備好要輸入的內容，一行代表一次輸入加 Enter（例如按兩次 Enter 再輸入 3：兩個空行加上一行 3）。"
                    "用的是標準輸入，所以只對讀標準輸入（cin、input()）的程式有效"}},
          "required": ["program"]}},
@@ -80,6 +86,38 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "packages": {"type": "array", "items": {"type": "string"}, "description": "套件名稱，可以帶版本，例如 numpy、pygame==2.6.1"}},
          "required": ["packages"]}},
+    {"name": "acceptance_set", "description":
+        "（只有 Lumina Code 能用）設定驗收指令。修 bug、加功能、或使用者描述了好幾個要求時，在改程式之前先寫一支驗收測試"
+        "（例如 test_acceptance.py）：使用者說的每個症狀或要求各寫一項檢查，除了「應該做到的」也要測「不應該發生的」"
+        "（例如門沒開時走不到出口、不會穿牆），用很多組隨機輸入測，全部通過時結束碼 0、有任何一項失敗結束碼非 0 並印出哪一項失敗。"
+        "寫好後用這個工具登記執行它的指令。之後每次你回答完，介面會自動再跑一次，沒通過會把結果交還給你修。"
+        "驗收測試登記後不要為了通過而放寬它；真的要改測試，改完要重新登記（使用者會再確認一次）。",
+     "inputSchema": {"type": "object", "properties": {
+         "command": {"type": "string", "description": "在工作資料夾執行的指令，例如 .venv\\Scripts\\python test_acceptance.py"},
+         "covers": {"type": "array", "items": {"type": "string"}, "description": "這支測試檢查了哪些要求（一項一句）"}},
+         "required": ["command", "covers"]}},
+    {"name": "design_review", "description":
+        "（只有 Lumina Code 能用）拿到這類程式該有的檢查清單。新做一個程式或加大功能時用兩次："
+        "phase=plan：開工前，用清單把使用者的話展開成完整規格（使用者沒說、但這類成品應該要有的東西），寫進 todo_write；"
+        "phase=review：說完成之前，對照清單審查成品缺了什麼、哪裡設計不好、什麼操作會出事。",
+     "inputSchema": {"type": "object", "properties": {
+         "kind": {"type": "string", "enum": ["game", "tool", "web", "cli", "other"],
+                  "description": "game 遊戲；tool 處理檔案或資料的桌面工具；web 網站或網頁應用；cli 命令列程式或作業題；other 其他"},
+         "phase": {"type": "string", "enum": ["plan", "review"]},
+         "reference": {"type": "string", "description": "參考的原作或同類產品（例如「Pac-Man」「Notion」），沒有就留空"}},
+         "required": ["kind", "phase"]}},
+    {"name": "todo_write", "description":
+        "（只有 Lumina Code 能用）任務清單：要做的事有三步以上，或使用者一次提了好幾個問題時，一開始就用它把每一件事列成一項"
+        "（使用者描述的每個症狀各列一項，不要合併）。之後每次狀態改變就整份重新送出：開始做的那項設成 in_progress（同時只能一項），"
+        "確認真的好了才設 completed。completed 的意思是「已經用執行結果驗證過」，不是「改完程式」：每項完成時在 evidence 寫你怎麼確認的"
+        "（跑了什麼、看到什麼數字或畫面）。還有沒完成的項目就不要跟使用者說做完了。",
+     "inputSchema": {"type": "object", "properties": {
+         "todos": {"type": "array", "items": {"type": "object", "properties": {
+             "content": {"type": "string", "description": "這一項要做什麼（具體、可以驗證）"},
+             "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+             "evidence": {"type": "string", "description": "completed 時必填：怎麼驗證的、結果是什麼"}},
+             "required": ["content", "status"]}}},
+         "required": ["todos"]}},
 ]
 
 
@@ -282,6 +320,79 @@ def grab(hwnd, out):
     return w, h
 
 
+VK = {"left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "space": 0x20, "enter": 0x0D, "esc": 0x1B,
+      "tab": 0x09, "shift": 0x10, "ctrl": 0x11, "alt": 0x12}
+EXTENDED = {0x25, 0x26, 0x27, 0x28}
+
+
+def vk_of(name):
+    name = name.strip().lower()
+    if name in VK:
+        return VK[name]
+    if len(name) == 1 and name.isalnum():
+        return ord(name.upper())
+    raise ToolError(f"不認得的按鍵：{name}（可以用 left right up down space enter esc tab shift ctrl a~z 0~9）")
+
+
+def send_keys(hwnd, vks, down):
+    """用視窗訊息按下或放開按鍵（送到隱藏桌面上的視窗，不會動到使用者的鍵盤）。"""
+    u = ctypes.windll.user32
+    for vk in vks:
+        sc = u.MapVirtualKeyW(vk, 0)
+        lp = 1 | (sc << 16) | ((1 << 24) if vk in EXTENDED else 0)
+        if not down:
+            lp |= (1 << 30) | (1 << 31)
+        u.PostMessageW(ctypes.c_void_p(hwnd), 0x0100 if down else 0x0101, vk, ctypes.c_void_p(lp))
+
+
+def parse_actions(lines):
+    out, total = [], 0.0
+    for raw in lines or []:
+        parts = str(raw).split()
+        if not parts:
+            continue
+        cmd = parts[0].lower()
+        try:
+            if cmd == "wait":
+                t = min(float(parts[1]), 10.0)
+                out.append(("wait", t))
+                total += t
+            elif cmd == "shot":
+                out.append(("shot", " ".join(parts[1:]) or f"第{len(out) + 1}步"))
+            elif cmd == "hold":
+                t = min(float(parts[2]), 10.0)
+                out.append(("hold", [vk_of(k) for k in parts[1].split("+")], t))
+                total += t
+            elif cmd == "press":
+                out.append(("hold", [vk_of(k) for k in parts[1].split("+")], 0.08))
+                total += 0.08
+            else:
+                raise ToolError(f"不認得的動作：{raw}")
+        except (IndexError, ValueError):
+            raise ToolError(f"動作格式不對：{raw}（例如 wait 1、shot 開始、hold right 1.5、press space）") from None
+    if total > 40:
+        raise ToolError("操作腳本總長不能超過 40 秒")
+    return out
+
+
+def game_window(wins, tag):
+    """有好幾個視窗時（主控台 + 遊戲視窗），挑遊戲視窗：標題不是 tag 的視窗裡面最大的。"""
+    import ctypes.wintypes as W
+    u = ctypes.windll.user32
+
+    def title(h):
+        b = ctypes.create_unicode_buffer(512)
+        u.GetWindowTextW(h, b, 512)
+        return b.value
+
+    def area(h):
+        r = W.RECT()
+        u.GetWindowRect(h, ctypes.byref(r))
+        return (r.right - r.left) * (r.bottom - r.top)
+    others = [h for h in wins if not title(h).startswith(tag)]
+    return max(others or wins, key=area) if wins else None
+
+
 # ---------------------------------------------------------------- 工具實作
 def t_pdf(name, a):
     f = need_file(a.get("file", ""), ROOTS + ([WORK] if WORK else []), [".pdf"])
@@ -311,6 +422,7 @@ def t_run_capture(a):
     prog = need_file(a.get("program", ""), [work], [".exe", ".bat", ".cmd", ".py"])
     args = [str(x) for x in (a.get("args") or [])]
     secs = min(15.0, max(1.0, float(a.get("seconds") or 3)))
+    actions = parse_actions(a.get("actions"))
     tag = "LUMINA-" + uuid.uuid4().hex[:6]
     ctypes.windll.user32.SetProcessDPIAware()
     rel = str(prog.relative_to(work))                   # 在工作資料夾裡執行，用相對路徑（避免引號和外層引號黏在一起被 cmd 解析錯）
@@ -320,7 +432,9 @@ def t_run_capture(a):
     else:
         cmdline = subprocess.list2cmdline([".\\" + rel] + args)
     # 用 conhost 開一個傳統的主控台視窗（不交給 Windows Terminal），標題設成 tag 方便找到這個視窗
-    inner = f'title {tag}' + (" & chcp 65001>nul" if a.get("utf8") else "") + f" & {cmdline}"
+    # 隱藏桌面看不到畫面，但聲音照樣會從使用者的喇叭出來：pygame / SDL 的程式一律不出聲
+    inner = (f'title {tag} & set SDL_AUDIODRIVER=dummy' + (" & chcp 65001>nul" if a.get("utf8") else "")
+             + f" & {cmdline}")
     result = {}
 
     def work_on_hidden_desktop():
@@ -341,11 +455,36 @@ def t_run_capture(a):
                     for ch in str(a["input"]).replace("\r\n", "\n"):
                         ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hw), 0x0102, 13 if ch == "\n" else ord(ch), 0)
                         time.sleep(0.05)
-            time.sleep(secs)
-            alive = _alive(pid) or bool(desktop_windows(hdesk, None, tag))
-            wins = desktop_windows(hdesk, None, tag)
             SHOTS.mkdir(parents=True, exist_ok=True)
             shots = []
+            if actions:
+                for _ in range(60):                     # 等遊戲視窗出來（主控台以外的視窗）
+                    time.sleep(0.2)
+                    if len(desktop_windows(hdesk, None, tag)) > 1:
+                        break
+                time.sleep(1.0)
+                for act in actions:
+                    hw = game_window(desktop_windows(hdesk, None, tag), tag)
+                    if act[0] == "wait":
+                        time.sleep(act[1])
+                    elif act[0] == "hold" and hw:
+                        end = time.time() + act[2]
+                        send_keys(hw, act[1], True)
+                        while time.time() < end:        # 按住期間持續送（像鍵盤按住時的自動重複）
+                            time.sleep(0.05)
+                            send_keys(hw, act[1], True)
+                        send_keys(hw, act[1], False)
+                    elif act[0] == "shot" and hw:
+                        out = SHOTS / f"play_{prog.stem}_{int(time.time() * 1000)}.png"
+                        w, h = grab(hw, out)
+                        shots.append(f"[{act[1]}] {out}（{w}×{h}）")
+                    if not _alive(pid) and len(desktop_windows(hdesk, None, tag)) <= 1:
+                        result["died"] = act[0] + (f" {act[1]}" if act[0] == "shot" else "")
+                        break
+            else:
+                time.sleep(secs)
+            alive = _alive(pid) or bool(desktop_windows(hdesk, None, tag))
+            wins = [] if actions else desktop_windows(hdesk, None, tag)
             for i, hw in enumerate(wins[:3]):
                 out = SHOTS / f"capture_{prog.stem}_{int(time.time())}_{i}.png"
                 w, h = grab(hw, out)
@@ -364,10 +503,16 @@ def t_run_capture(a):
             for o in owners:
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(o)], capture_output=True, creationflags=0x08000000)
     t = threading.Thread(target=work_on_hidden_desktop)
-    t.start(); t.join(secs + 30)
+    t.start(); t.join(secs + 30 + (sum(x[-1] for x in actions if x[0] != "shot") + 20 if actions else 0))
     if "error" in result:
         raise result["error"]
     shots, alive = result.get("shots", []), result.get("alive", False)
+    if actions:
+        died = result.get("died")
+        return ("操作截圖（照腳本順序）：\n" + ("\n".join(shots) or "（沒有截到遊戲視窗）") +
+                (f"\n⚠ 程式在「{died}」之後就結束了（可能當掉），用 run_command 執行看錯誤訊息。" if died else "\n程式已經關閉。") +
+                "\n（提醒：逐張用 view_file 打開，比較前後差異：按了方向鍵角色有沒有移動、敵人有沒有在動、畫面有沒有出錯。"
+                "沒有反應就是 bug，不能說完成；回答時寫出每張圖看到了什麼。）")
     if not shots:
         return (f"沒有截到視窗：程式在 {secs:g} 秒內{'已經結束' if not alive else '沒有開出視窗'}。"
                 "如果它執行完就關閉，改用 run_command 執行並看輸出；或把 seconds 調短。")
@@ -407,10 +552,157 @@ def t_venv_install(a):
     return "安裝完成：\n" + tail
 
 
+TODOS = []          # 這次工作階段的任務清單（工具伺服器跟著工作階段啟動，所以放記憶體就好）
+MARK = {"pending": "☐", "in_progress": "▶", "completed": "☑"}
+
+
+def todo_text():
+    return "\n".join(f"{MARK.get(t['status'], '☐')} {t['content']}" + (f"（驗證：{t['evidence']}）" if t.get("evidence") else "")
+                     for t in TODOS)
+
+
+def t_todo_write(a):
+    need_work()
+    todos = a.get("todos")
+    if not isinstance(todos, list) or not todos:
+        raise ToolError("todos 要是一個不是空的清單。")
+    clean = []
+    for t in todos:
+        if not isinstance(t, dict) or not str(t.get("content") or "").strip():
+            raise ToolError("每一項都要有 content。")
+        st = t.get("status") if t.get("status") in MARK else "pending"
+        ev = str(t.get("evidence") or "").strip()
+        if st == "completed" and not ev:
+            raise ToolError(f"「{t['content']}」設成 completed 但沒有寫 evidence。先實際執行確認，再把怎麼確認的寫進 evidence。")
+        clean.append({"content": str(t["content"]).strip(), "status": st, "evidence": ev})
+    if sum(t["status"] == "in_progress" for t in clean) > 1:
+        raise ToolError("同時只能有一項是 in_progress。")
+    TODOS[:] = clean
+    left = [t for t in clean if t["status"] != "completed"]
+    tip = (f"\n\n還有 {len(left)} 項沒完成，繼續做下一項。" if left else
+           "\n\n全部完成。回覆使用者前，再對照一次使用者原本的要求：每個症狀都有對應的一項、而且都實際驗證過了嗎？"
+           "有沒驗證到的就加回清單。")
+    return "任務清單已更新：\n" + todo_text() + tip
+
+
+CHECKLISTS = {
+    "game": [
+        "核心玩法：原作（或這類遊戲）最重要的 3～5 個機制都有，而且規則正確",
+        "完整流程：標題畫面 → 開始 → 遊玩 → 死亡／失敗（要有動畫或停頓，不能瞬間重來）→ 過關或結束 → 重新開始",
+        "回饋：音效（用程式產生也可以）、受傷閃爍、得分跳字、畫面震動等，玩家的每個動作都有感覺得到的反應",
+        "敵人：種類不只一種、行為各不相同、有可以被看穿的規律，不是只會朝玩家直線衝",
+        "操作手感：按鍵反應即時、轉向與碰撞不卡、視角方向符合直覺（例如 3D 左右不能顛倒）",
+        "獎勵與目標：分數、道具或收集品、難度隨關卡上升，讓人想繼續玩",
+        "地圖與場景：沒有走不到的區域、沒有卡死的位置、邊界處理正確",
+        "畫面：角色有造型，介面顯示必要資訊（分數、生命、關卡），中文不亂碼",
+        "【驗收測試一定要用程式長時間模擬，不能只看截圖】跑 30～120 秒的遊戲迴圈（不開視窗），檢查："
+        "每個會動的角色真的走了很多格（記錄走過的格子數）、不會卡在同一個地方（例如門口、牆角）；"
+        "玩家站著不動時敵人最後會抓到他；玩家亂按方向鍵幾千步不穿牆、不出錯；吃到道具後狀態真的改變並且會恢復；"
+        "死亡、過關、遊戲結束這些流程真的會發生。模擬要用遊戲實際的每幀時間（例如 1/60 秒）跑，"
+        "另外再用較大的時間（1/30、0.1 秒，模擬卡頓）各跑一次——只用一種時間間隔，常會漏掉只在實際幀率出現的卡住問題。"
+        "截圖只用來看外觀，判斷「有沒有在動」一律用模擬的數字",
+    ],
+    "tool": [
+        "資料安全：寫檔先寫到暫存檔再改名，失敗時原檔不受影響；不會覆蓋使用者的原始檔",
+        "資源釋放：檔案、執行緒、子程序、大量記憶體用完一定關閉或釋放，連續處理很多檔案後記憶體不會一直漲",
+        "中斷與當機：處理到一半取消、關閉視窗、斷電後重開，不會留下壞檔或卡住的暫存檔",
+        "極端輸入：空檔案、超大檔案、損壞的檔案、路徑有空格或中文、沒有權限的資料夾",
+        "進度與回應：長時間工作要顯示進度、可以取消，介面不能凍住",
+        "錯誤訊息：出錯時告訴使用者發生什麼事、怎麼處理，不是只丟出例外",
+        "相容性：不同 Windows 設定（縮放比例、語系）、沒有網路時的行為",
+    ],
+    "web": [
+        "主要流程從頭到尾都走得通（新增、修改、刪除、重新整理後資料還在）",
+        "輸入檢查：空值、超長、特殊字元、重複送出",
+        "安全：不把密碼或金鑰寫在前端、防止注入、權限檢查在伺服器端",
+        "錯誤與載入狀態：網路慢或失敗時有提示，不會白畫面",
+        "手機寬度可以用、深色模式可讀",
+    ],
+    "cli": [
+        "題目或需求的每一條規格都有對應，輸入輸出格式完全照要求",
+        "邊界輸入：空輸入、最大值、負數、重複資料",
+        "錯誤輸入時不當機，給清楚的訊息",
+        "效率：資料量大時時間和記憶體在合理範圍",
+    ],
+    "other": [
+        "使用者明說的每個要求都有做到",
+        "同類成品通常會有、但使用者沒提到的功能，列出來判斷要不要補",
+        "最可能出錯或讓使用者困惑的地方",
+        "資料與資源：會不會損毀檔案、佔住記憶體或檔案不放",
+    ],
+}
+
+
+def t_design_review(a):
+    need_work()
+    kind = a.get("kind") if a.get("kind") in CHECKLISTS else "other"
+    ref = str(a.get("reference") or "").strip()
+    items = "\n".join(f"- {x}" for x in CHECKLISTS[kind])
+    if a.get("phase") == "review":
+        return ("設計審查清單" + (f"（參考：{ref}）" if ref else "") + "：\n" + items +
+                "\n\n逐項對照成品（實際操作或執行過再判斷，不要憑印象）。"
+                "\n- 清單上的項目就是這個成品本來該有的，**屬於這次的工作**：缺了就補上並驗證，更新 todo_write。"
+                "不能因為使用者沒明說就改成建議（例如做遊戲卻沒有音效、死亡沒有動畫，都是沒做完）。"
+                "\n- 只有這兩類寫成「建議（尚未執行）」：①明顯超出這個成品的新方向（例如多人連線、關卡編輯器、改用別的技術）"
+                "②對外或難以復原的事（建立 repo、上傳、發布、刪除檔案、裝大型軟體）。")
+    return ("規格展開清單" + (f"（參考：{ref}）" if ref else "") + "：\n" + items +
+            "\n\n用這份清單把使用者的話展開成規格：" + (f"先想 {ref} 實際玩起來／用起來有哪些要素，" if ref else "") +
+            "列出使用者明說的要求，再補上這類成品應該要有的東西（標示「補充」）——**補充的項目也是這次要做的**，全部寫進 todo_write。"
+            "只有明顯超出這個成品的新方向才留到最後當建議。")
+    return ("規格展開清單" + (f"（參考：{ref}）" if ref else "") + "：\n" + items +
+            "\n\n用這份清單把使用者的話展開成規格：" + (f"先想 {ref} 實際玩起來／用起來有哪些要素，" if ref else "") +
+            "列出使用者明說的要求，再補上這類成品應該要有的東西（標示「補充」）。"
+            "把規格逐項寫進 todo_write，範圍明顯太大的部分留到最後當建議，不要擅自擴大工作。")
+
+
+ACCEPT_FILE = ".agents/lumina_acceptance.json"     # 介面伺服器也讀這個檔（server.py 的 run_acceptance）
+
+
+def command_files(work, command):
+    """指令裡提到、而且在工作資料夾裡的檔案和它們的雜湊：測試檔被改過就不會自動執行。"""
+    import hashlib
+    out = {}
+    for tok in re.findall(r'"([^"]+)"|(\S+)', command):
+        t = (tok[0] or tok[1]).strip()
+        p = (work / t) if not Path(t).is_absolute() else Path(t)
+        try:
+            if p.is_file() and inside(p, [work]) and p.suffix.lower() not in (".exe",):
+                out[str(p.resolve().relative_to(work))] = hashlib.sha1(p.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def t_acceptance_set(a):
+    work = need_work()
+    cmd = str(a.get("command") or "").strip()
+    covers = [str(c).strip() for c in (a.get("covers") or []) if str(c).strip()]
+    if not cmd or not covers:
+        raise ToolError("要有 command 和 covers。")
+    files = command_files(work, cmd)
+    if not files:
+        raise ToolError("指令裡找不到工作資料夾裡的測試檔。先把驗收測試寫好存檔，再登記執行它的指令。")
+    f = work / ACCEPT_FILE
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"command": cmd, "covers": covers, "files": files, "t": time.time()},
+                            ensure_ascii=False, indent=1), encoding="utf-8")
+    return ("已登記驗收指令：" + cmd + "\n檢查項目：" + "；".join(covers) +
+            "\n現在先自己跑一次（應該會失敗，代表測試真的抓得到問題），再開始改程式。之後每次回答結束介面都會重跑。")
+
+
+def with_todo_reminder(name, text):
+    """其他工具回傳時順便提醒還沒完成的項目（提醒放在動作當下，不靠開頭的提示）。"""
+    left = [t for t in TODOS if t["status"] != "completed"]
+    if name == "todo_write" or not left:
+        return text
+    return text + "\n\n（任務清單還有 " + str(len(left)) + " 項沒完成：" + "；".join(t["content"] for t in left[:5]) + "）"
+
+
 def call(name, a):
     if name.startswith("pdf_"):
         return t_pdf(name, a)
-    return {"run_capture": t_run_capture, "venv_create": t_venv_create, "venv_install": t_venv_install}[name](a)
+    return {"run_capture": t_run_capture, "venv_create": t_venv_create, "venv_install": t_venv_install,
+            "todo_write": t_todo_write, "acceptance_set": t_acceptance_set, "design_review": t_design_review}[name](a)
 
 
 # ---------------------------------------------------------------- MCP（JSON-RPC，一行一則）
@@ -439,7 +731,7 @@ def main():
         elif method == "tools/call":
             p = msg.get("params") or {}
             try:
-                text, err = call(p.get("name", ""), p.get("arguments") or {}), False
+                text, err = with_todo_reminder(p.get("name", ""), call(p.get("name", ""), p.get("arguments") or {})), False
             except ToolError as e:
                 text, err = str(e), True
             except Exception as e:                            # 工具本身出錯：回報給模型，不要讓伺服器掛掉
