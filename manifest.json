@@ -1,8 +1,8 @@
 {
- "version": "2.3.0",
+ "version": "2.3.1",
  "files": {
   "server.py": "8402f9472c4f2cfa307db9c01602f3670ea89baa673b0ea7ec5d5ba84f4c3843",
-  "version.py": "55850d06d9fda1bc4f9fa14a883f40e53f7e82504d290131fc7f3ad6524aba90",
+  "version.py": "36579f3862fc060bbcae86e4a2cde8da0062ab40d5c6bf8aecddf47cf6866c00",
   "updater.py": "2e99a0189125fb610c24566d020535217db3a54c7e7228ba663136052ee708c4",
   "components.py": "28c741f74ce6d3172dbc77eabf9e2522dae1787f44e49ae18524b301409df8d4",
   "command_guard.py": "4724432735ba7b5ce3bcdde2c324aa188d02d135c770b9af6aff58245c89f483",
@@ -10,7 +10,7 @@
   "tools/lumina.py": "6e16c72f3526986fb44e3eccddb18d15a6f848d1dd285cd3ca79d53be685d5ac",
   "tools/lumina_mcp.py": "48c8d016087aa47d63e058b1e06b8f4daa99ca96170c9b3c7cc2dc499e3a922c",
   "tools/lumina_web.py": "d8fa9f2e3e4e2c9eb27b5c44f0c77b759ce13f42b82a8c0314addcb603068132",
-  "static/index.html": "6b093c885a39e39414da83568413322eda752daa5c318bdc55e2132e3469c87b",
+  "static/index.html": "bb562c8e08a840da4e2d33cac716e070d1e00463d6eb9adde6155d56fb3e4a70",
   "skills/pdf-document/SKILL.md": "57142c1e56c03995897ccf6c6003d1e3845c5de792196c452c087bb42e05372c",
   "skills/pdf-document/references/packages.md": "8cfcc31a24311ce8d2d0a5156582d47850e79b930e4af2119cf08ad7f156ab55",
   "skills/pdf-document/references/notes.typ": "131425f0434d34b48a7f1491518f991b54491b350ebc93e1acc03bcd8971739f",

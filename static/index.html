@@ -169,6 +169,16 @@ body.busy .acts{display:none}
 .chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip button{border:0;background:none;color:var(--muted);padding:0 2px}
 #input{width:100%;border:0;outline:0;resize:none;background:none;min-height:44px;max-height:40vh;padding:6px 2px}
+/* 即時排版的輸入框（像 Claude）：- 變清單、``` 變程式碼框、> 變引用 */
+#ed{min-height:44px;max-height:40vh;overflow-y:auto;outline:0;padding:6px 2px;font-size:var(--fs);line-height:1.6;word-break:break-word;white-space:pre-wrap}
+#ed:empty::before{content:attr(data-ph);color:var(--muted);pointer-events:none}
+#box.has-sug #ed:empty::before{color:color-mix(in srgb,var(--accent) 55%,var(--muted));font-style:italic}
+#ed p{margin:0;min-height:1.6em}
+#ed ul,#ed ol{margin:2px 0;padding-left:1.6em}
+#ed li{min-height:1.6em}
+#ed pre{margin:4px 0;padding:8px 10px;background:var(--code);border:1px solid var(--border);border-radius:8px;font-family:Consolas,"Cascadia Mono",monospace;font-size:.92em;white-space:pre-wrap;min-height:1.6em}
+#ed pre[data-lang]:not([data-lang=""])::before{content:attr(data-lang);display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+#ed blockquote{margin:2px 0;padding-left:10px;border-left:3px solid var(--border);color:var(--muted)}
 #row{display:flex;align-items:center;gap:8px}
 #row .hint{flex:1;font-size:12px;color:var(--muted)}
 #attach{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px}
@@ -255,6 +265,7 @@ body.notimes .mtime,body.notimes .convtime{display:none}
 .actlist{max-height:300px;overflow:auto;margin-top:6px;padding:6px 10px;border-left:2px solid var(--border)}
 .arow{padding:3px 0;word-break:break-all}
 .arow.tool::before{content:"⚙ ";}
+.arow img.actthumb{display:block;max-height:96px;max-width:min(320px,100%);margin:4px 0 2px 18px;border-radius:6px;border:1px solid var(--border);cursor:zoom-in}
 .arow.think{font-style:italic;opacity:.85}
 .arow.think p{margin:0 0 4px}
 .arow.perm{color:var(--text)}
@@ -388,10 +399,10 @@ body.resizing{cursor:col-resize;user-select:none}
   #bar{padding:8px 16px}
 }
 /* 圖片、PDF 預覽 */
-#viewer{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.78);display:none;flex-direction:column;align-items:center;padding:12px 2vw}
+#viewer{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.72);display:none;flex-direction:column;align-items:center;justify-content:center;padding:16px}
 #viewer.on{display:flex}
-#viewer .vbar{display:flex;gap:8px;align-items:center;width:100%;max-width:1600px;color:#eee;font-size:13px;margin-bottom:8px}
-#viewer .vbody{flex:1;min-height:0;width:100%;max-width:1600px;display:flex;align-items:center;justify-content:center}
+#viewer .vbar{display:flex;gap:8px;align-items:center;width:min(960px,100%);color:#eee;font-size:13px;margin-bottom:8px}
+#viewer .vbody{height:min(86vh,1200px);width:min(960px,100%);display:flex;align-items:center;justify-content:center}
 #viewer .vbar .vt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #viewer .vbar a,#viewer .vbar button{color:#eee;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:3px 10px;font-size:13px;cursor:pointer;text-decoration:none}
 #viewer img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;background:#111}
@@ -439,7 +450,8 @@ body.resizing{cursor:col-resize;user-select:none}
     <div id="permDock" hidden></div>
     <div id="box">
       <div id="chips"></div>
-      <textarea id="input" rows="2" placeholder="問點什麼…（Enter 送出，Shift+Enter 換行）"></textarea>
+      <textarea id="input" rows="2" placeholder="問點什麼…（Enter 送出，Shift+Enter 換行）" hidden></textarea>
+      <div id="ed" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false"></div>
       <div id="row">
         <button id="attach" title="附加檔案">📎 附件</button>
         <input type="file" id="fileIn" multiple hidden>
@@ -834,6 +846,7 @@ function stepLabel(s){
 async function send(){
   if (curRun()) return stop();
   const text = $("#input").value.trim();
+  if (text) window.inputSent?.(text);
   if (!text && !pending.length) return;
   if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
   const files = pending.map(p => p.path);
@@ -884,8 +897,7 @@ async function runTurn(text, files, fork){
         if (su){
           if (su.step_type === "agent_response" && su.text_delta){ reply += su.text_delta; st.hide(); }
           if (su.step_type === "tool" && su.state === "ACTIVE"){
-            const label = stepLabel({tool:su.tool_name, params:(su.tool_info||{}).parameters});
-            actRow(a, "tool", label);
+            toolRow(a, {tool:su.tool_name, params:(su.tool_info||{}).parameters});
             st.set(su.tool_name === "search_web" ? "上網搜尋中" : su.tool_name === "view_file" ? "讀取檔案中" : "使用工具 " + su.tool_name);
           }
           if (su.step_type === "tool" && su.state === "DONE") st.set("模型思考中");
@@ -1067,6 +1079,305 @@ function mdIndent(out){
   return true;
 }
 $("#send").onclick = send;
+
+/* ---------- 即時排版的輸入框 ----------
+   畫面上是 #ed（contenteditable），真正的文字還是放在隱藏的 #input：
+   其他程式照舊讀寫 $("#input").value / placeholder，這裡負責兩邊同步（送出時是 Markdown）。 */
+(function(){
+  const ed = $("#ed"), ta = $("#input");
+  const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  const phProto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "placeholder");
+  const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+  // ---- Markdown ↔ 區塊
+  function toMd(keepTrail){
+    const out = [];
+    const list = (el, depth) => {
+      let n = 1;
+      for (const li of el.children){
+        if (li.tagName !== "LI") continue;
+        const own = [...li.childNodes].filter(c => !(c.tagName === "UL" || c.tagName === "OL")).map(c => c.textContent).join("");
+        out.push("  ".repeat(depth) + (el.tagName === "OL" ? `${n++}. ` : "- ") + own.replace(/\n/g, " "));
+        for (const sub of li.children) if (sub.tagName === "UL" || sub.tagName === "OL") list(sub, depth + 1);
+      }
+    };
+    for (const b of ed.children){
+      if (b.tagName === "UL" || b.tagName === "OL") list(b, 0);
+      else if (b.tagName === "PRE") out.push("```" + (b.dataset.lang || ""), b.innerText.replace(/\n+$/, ""), "```");
+      else if (b.tagName === "BLOCKQUOTE") b.textContent.split("\n").forEach(l => out.push("> " + l));
+      else out.push(b.textContent);
+    }
+    const md = out.join("\n").replace(/ /g, " ");
+    return keepTrail ? md : md.replace(/\s+$/, "");
+  }
+  function fromMd(md){
+    const lines = (md || "").split("\n"), html = [];
+    for (let i = 0; i < lines.length; i++){
+      const l = lines[i];
+      const f = l.match(/^\s*```([\w+-]*)\s*$/);
+      if (f){
+        const body = []; i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
+        html.push(`<pre data-lang="${esc(f[1])}">${esc(body.join("\n")) || "<br>"}</pre>`); continue;
+      }
+      const m = l.match(/^\s*([-*+]|\d+[.)])\s+(.+)$/);     // 只有「- 」沒內容：當一般文字（Ctrl+Z 復原排版後的樣子）
+      if (m){
+        const tag = /\d/.test(m[1]) ? "ol" : "ul", items = [];
+        while (i < lines.length){
+          const k = lines[i].match(/^\s*([-*+]|\d+[.)])\s+(.*)$/);
+          if (!k || (/\d/.test(k[1]) ? "ol" : "ul") !== tag) break;
+          items.push(`<li>${esc(k[2]) || "<br>"}</li>`); i++;
+        }
+        i--; html.push(`<${tag}>${items.join("")}</${tag}>`); continue;
+      }
+      const q = l.match(/^\s*>\s?(.+)$/);
+      if (q){ html.push(`<blockquote>${esc(q[1]) || "<br>"}</blockquote>`); continue; }
+      html.push(`<p>${esc(l) || "<br>"}</p>`);
+    }
+    ed.innerHTML = md ? html.join("") : "";
+  }
+  const sync = () => proto.set.call(ta, toMd());
+  Object.defineProperty(ta, "value", {get(){ return proto.get.call(ta); },
+    set(v){ proto.set.call(ta, v); fromMd(v); if (v) caretTo(ed.lastElementChild, true); }});
+  Object.defineProperty(ta, "placeholder", {get(){ return phProto.get.call(ta); },
+    set(v){ phProto.set.call(ta, v); ed.dataset.ph = v; }});
+  ed.dataset.ph = ta.placeholder;
+  ta.focus = () => ed.focus();
+
+  // ---- 游標
+  const sel = () => getSelection();
+  function caretTo(el, atEnd){
+    if (!el) return;
+    const r = document.createRange();
+    let node = el;
+    if (atEnd){ while (node.lastChild && !(node.lastChild.tagName === "UL" || node.lastChild.tagName === "OL")) node = node.lastChild; }
+    else { while (node.firstChild) node = node.firstChild; }
+    if (node.nodeType === 3) r.setStart(node, atEnd ? node.length : 0);
+    else r.setStart(node, atEnd && node.tagName !== "BR" ? node.childNodes.length : 0);
+    r.collapse(true); sel().removeAllRanges(); sel().addRange(r);
+  }
+  // 游標所在的區塊：清單項目 <li>、<pre>、<blockquote> 或 <p>
+  function block(){
+    let n = sel().anchorNode;
+    while (n && n !== ed){
+      if (n.nodeType === 1 && /^(LI|PRE|BLOCKQUOTE|P|DIV)$/.test(n.tagName)) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+  // 游標前面的文字（同一個區塊內）
+  function before(b){
+    const r = sel().getRangeAt(0).cloneRange();
+    r.setStart(b, 0);
+    return r.toString();
+  }
+  const atEndOf = b => { const r = sel().getRangeAt(0).cloneRange(); r.selectNodeContents(b); r.setStart(sel().anchorNode, sel().anchorOffset); return !r.toString().replace(/\n$/, ""); };
+  const make = (tag, text) => { const e = document.createElement(tag); if (text) e.textContent = text; else e.innerHTML = "<br>"; return e; };
+
+  // 確保最上層都是區塊（第一次打字時瀏覽器會直接放文字節點）
+  function normalize(){
+    for (const c of [...ed.childNodes]){
+      if (c.nodeType === 3 || (c.nodeType === 1 && c.tagName === "BR") || (c.nodeType === 1 && c.tagName === "DIV")){
+        if (c.nodeType === 1 && c.tagName === "DIV"){ const p = make("p"); p.innerHTML = c.innerHTML || "<br>"; c.replaceWith(p); continue; }
+        const p = make("p"); c.replaceWith(p); p.innerHTML = ""; p.appendChild(c);
+        if (c.nodeType === 3) caretTo(p, true);
+      }
+    }
+  }
+
+  // ---- 打字時的轉換規則：行首的 "- " "1. " "> "
+  ed.addEventListener("input", e => {
+    normalize();
+    if (!e.isComposing){
+      const b = block();
+      const mdBefore = toMd(true);                 // 自動排版前的樣子（給 Ctrl+Z 用）
+      // 只在「剛打下標記後面的空白」那一刻轉換；Ctrl+Z 變回文字後繼續打字不會又被轉掉
+      // Ctrl+Z 變回文字的那一行會標記 literal，之後繼續打字也不會再被轉掉
+      if (b && b.tagName === "P" && !b.dataset.literal && /^\s*([-*+－]|\d+[.)]|>)[\s 　]/.test(b.textContent)){
+        const t = b.textContent.replace(/ /g, " ");
+        let m;
+        if ((m = t.match(/^([-*+－])\s(.*)$/s)) || (m = t.match(/^(\d+)[.)]\s(.*)$/s))){
+          const ordered = /\d/.test(m[1]), list = document.createElement(ordered ? "ol" : "ul");
+          if (ordered && +m[1] !== 1) list.start = +m[1];
+          const li = make("li", m[2]); list.appendChild(li);
+          // 和上一個同種清單接起來
+          const prev = b.previousElementSibling;
+          if (prev && prev.tagName === list.tagName){ prev.appendChild(li); b.remove(); }
+          else b.replaceWith(list);
+          caretTo(li, true); undoMd = mdBefore;
+        } else if ((m = t.match(/^>\s(.*)$/s))){
+          const q = make("blockquote", m[1]); b.replaceWith(q); caretTo(q, true); undoMd = mdBefore;
+        }
+      }
+    }
+    sync(); $("#box").classList.toggle("has-sug", !!suggestion && !ta.value);
+  });
+
+  // ---- 參考 Claude Code 的輸入框：歷史、草稿、復原自動排版、方向鍵離開區塊
+  const store2 = {get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+                  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }};
+  let hist = store2.get("lumina.inputHistory") || [], histPos = -1, histDraft = "", lastEsc = 0, undoMd = null;
+  const pushHist = md => { if (!md.trim()) return; hist = [md, ...hist.filter(h => h !== md)].slice(0, 50); store2.set("lumina.inputHistory", hist); };
+  window.inputSent = md => {                       // 送出：記進歷史、清掉這段對話的草稿
+    pushHist(md); histPos = -1;
+    const d = store2.get("lumina.drafts") || {}; delete d[draftKey]; store2.set("lumina.drafts", d);
+  };
+  // 每段對話各自的草稿：切換對話時存起來，切回來時放回去
+  let draftKey = "new";
+  window.draftSwitch = id => {
+    const d = store2.get("lumina.drafts") || {};
+    if (ta.value.trim()) d[draftKey] = ta.value; else delete d[draftKey];
+    draftKey = id || "new";
+    store2.set("lumina.drafts", d);
+    proto.set.call(ta, d[draftKey] || ""); fromMd(d[draftKey] || "");
+  };
+  const saveDraft = () => { const d = store2.get("lumina.drafts") || {}; if (ta.value.trim()) d[draftKey] = ta.value; else delete d[draftKey]; store2.set("lumina.drafts", d); };
+  ed.addEventListener("input", () => saveDraft());
+  const setMd = md => { ta.value = md; sync(); saveDraft(); };
+  // 游標在區塊的第一行／最後一行（依畫面上的位置判斷，換行折行也算）
+  function onEdgeRow(b, up){
+    const r = sel().getRangeAt(0).cloneRange(); r.collapse(true);
+    const rect = (r.getClientRects()[0] || b.getBoundingClientRect()), box = b.getBoundingClientRect();
+    const lh = parseFloat(getComputedStyle(b).lineHeight) || 20;
+    return up ? rect.top - box.top < lh * 0.9 + parseFloat(getComputedStyle(b).paddingTop || 0)
+              : box.bottom - rect.bottom < lh * 0.9 + parseFloat(getComputedStyle(b).paddingBottom || 0);
+  }
+
+  ed.addEventListener("keydown", e => {
+    if (e.isComposing) return;
+    const b = block();
+    // Ctrl+Z 緊接在自動排版之後：變回原本打的文字（例如清單變回「- 」）
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && undoMd !== null){
+      e.preventDefault(); const md = undoMd; undoMd = null; setMd(md);
+      ed.querySelectorAll("p").forEach(p => { if (/^\s*([-*+－]|\d+[.)]|>|```)/.test(p.textContent)) p.dataset.literal = "1"; });
+      caretTo(ed.lastElementChild, true); return;
+    }
+    if (!["Control", "Shift", "Alt", "Meta"].includes(e.key) && !((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) undoMd = null;
+    // Esc 連按兩次：清空輸入框（存進歷史，按 ↑ 可以找回來）
+    if (e.key === "Escape" && ta.value){
+      if (Date.now() - lastEsc < 600){ e.preventDefault(); pushHist(ta.value); setMd(""); lastEsc = 0; }
+      else lastEsc = Date.now();
+      return;
+    }
+    // → 或 Tab 在空的輸入框：採用預測的回覆
+    if (e.key === "ArrowRight" && suggestion && !ta.value){ e.preventDefault(); setMd(suggestion); clearSuggestion(); return; }
+    // ↑／↓：程式碼框、引用、清單的第一行／最後一行再往外按，就跳出框外（沒有下一段就新增一段）
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && b && b.tagName !== "P"){
+      const up = e.key === "ArrowUp";
+      const top = b.tagName === "LI" ? b.closest("#ed > ul, #ed > ol") : b;
+      const edgeItem = b.tagName !== "LI" || (up ? !b.previousElementSibling && b.parentNode === top : !b.nextElementSibling && b.parentNode === top);
+      if (edgeItem && onEdgeRow(b, up)){
+        const sib = up ? top.previousElementSibling : top.nextElementSibling;
+        e.preventDefault();
+        if (sib) caretTo(sib, !up);
+        else { const p = make("p"); up ? top.before(p) : top.after(p); caretTo(p, false); }
+        sync(); return;
+      }
+    }
+    // ↑ 在空的輸入框（或正在翻歷史）：叫回之前送出的訊息；↓ 往回
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && hist.length && (!ta.value || histPos >= 0) && onEdgeRow(b || ed, e.key === "ArrowUp")){
+      e.preventDefault();
+      if (histPos < 0) histDraft = ta.value;
+      histPos = Math.max(-1, Math.min(hist.length - 1, histPos + (e.key === "ArrowUp" ? 1 : -1)));
+      setMd(histPos < 0 ? histDraft : hist[histPos]);
+      return;
+    }
+    if (e.key === "Tab"){
+      if (suggestion && !ta.value){ e.preventDefault(); ta.value = suggestion; clearSuggestion(); sync(); return; }
+      if (b && b.tagName === "LI"){                       // 清單縮排／取消縮排
+        e.preventDefault();
+        if (!e.shiftKey){
+          const prev = b.previousElementSibling;
+          if (!prev) return;
+          let sub = [...prev.children].find(c => c.tagName === b.parentNode.tagName);
+          if (!sub){ sub = document.createElement(b.parentNode.tagName); prev.appendChild(sub); }
+          sub.appendChild(b);
+        } else {
+          const outer = b.parentNode.parentNode;
+          if (outer && outer.tagName === "LI") outer.after(b);
+        }
+        caretTo(b, true); sync();
+      } else if (b && b.tagName === "PRE"){ e.preventDefault(); document.execCommand("insertText", false, "  "); }
+      return;
+    }
+    if (e.key === "Backspace" && b && !before(b)){
+      if (b.tagName === "LI" || b.tagName === "BLOCKQUOTE" || (b.tagName === "PRE" && !b.textContent.trim())){
+        e.preventDefault();                              // 行首按刪除：先變回一般段落
+        const p = make("p"); p.append(...[...b.childNodes].filter(c => !(c.tagName === "UL" || c.tagName === "OL")));
+        if (!p.textContent) p.innerHTML = "<br>";
+        if (b.tagName === "LI"){
+          const list = b.parentNode, after = [...list.children].slice([...list.children].indexOf(b) + 1);
+          if (after.length){ const rest = document.createElement(list.tagName); rest.append(...after); list.after(rest); }
+          list.after(p); b.remove(); if (!list.children.length) list.remove();
+        } else b.replaceWith(p);
+        caretTo(p, false); sync(); return;
+      }
+    }
+    if (e.key !== "Enter") return;
+    // ``` + Enter：變成程式碼框
+    if (b && b.tagName === "P"){
+      const m = b.textContent.match(/^\s*```([\w+-]*)\s*$/);
+      if (m){ e.preventDefault(); undoMd = toMd(); const pre = make("pre"); pre.dataset.lang = m[1]; b.replaceWith(pre); caretTo(pre, false); sync(); return; }
+    }
+    if (b && b.tagName === "PRE"){                       // 程式碼框裡 Enter 是換行；最後一行空著再按 Enter 就離開
+      e.preventDefault();
+      const upto = before(b);
+      if (upto && atEndOf(b) && /\n$/.test(upto) && !e.shiftKey){
+        b.textContent = b.innerText.replace(/\n+$/, "");      // 最後一行空著：拿掉空行、離開程式碼框
+        if (!b.textContent) b.innerHTML = "<br>";
+        const p = make("p"); b.after(p); caretTo(p, false);
+      } else {
+        const r = sel().getRangeAt(0); r.deleteContents();
+        b.querySelectorAll("br").forEach(x => x.remove());
+        const nl = document.createTextNode("\n"); r.insertNode(nl);
+        if (atEndOf(b)) nl.after(document.createTextNode("\n"));   // 尾端要多一個換行，新的空行才看得到
+        const c = document.createRange(); c.setStartAfter(nl); c.collapse(true);
+        sel().removeAllRanges(); sel().addRange(c);
+      }
+      sync(); return;
+    }
+    const wantsSend = savedPrefs.send_key === "ctrl_enter" ? (e.ctrlKey || e.metaKey) : !e.shiftKey;
+    if (b && b.tagName === "LI" && !(wantsSend && savedPrefs.send_key === "ctrl_enter")){
+      if (!b.textContent.trim()){                       // 空的項目按 Enter：結束清單
+        e.preventDefault();
+        const list = b.parentNode, outer = list.parentNode;
+        if (outer && outer.tagName === "LI"){ outer.after(b); caretTo(b, false); }
+        else { const p = make("p"); list.after(p); b.remove(); if (!list.children.length) list.remove(); caretTo(p, false); }
+        sync(); return;
+      }
+      if (!e.shiftKey || savedPrefs.send_key === "ctrl_enter"){
+        if (wantsSend && savedPrefs.send_key !== "ctrl_enter" && !e.shiftKey){
+          // 清單裡按 Enter（沒按 Shift）：新項目，不送出（像 Claude）
+        }
+        e.preventDefault();
+        const r = sel().getRangeAt(0); r.setEndAfter(b.lastChild || b);
+        const rest = r.extractContents(), li = document.createElement("li");
+        li.append(...[...rest.childNodes].flatMap(c => c.tagName === "LI" ? [...c.childNodes] : [c]));
+        if (!li.textContent) li.innerHTML = "<br>";
+        if (!b.textContent) b.innerHTML = "<br>";
+        b.after(li); caretTo(li, false); sync(); return;
+      }
+    }
+    if (wantsSend){ e.preventDefault(); sync(); send(); return; }
+    // 換行：新段落（引用裡就延續引用）
+    e.preventDefault();
+    if (b && b.tagName === "BLOCKQUOTE" && !b.textContent.trim()){ const p = make("p"); b.replaceWith(p); caretTo(p, false); }
+    else document.execCommand("insertParagraph");
+    normalize(); sync();
+  });
+
+  ed.addEventListener("paste", e => {
+    const fs = [...(e.clipboardData?.files || [])];
+    e.preventDefault();
+    if (fs.length) return addFiles(fs);
+    const text = e.clipboardData.getData("text/plain");
+    const b = block();
+    if (b && b.tagName === "PRE") document.execCommand("insertText", false, text);
+    else if (/\n/.test(text) && !ta.value){ ta.value = text; }        // 空的輸入框貼上多行：照 Markdown 排好
+    else document.execCommand("insertText", false, text);
+    sync();
+  });
+})();
 
 /* ---------- models / settings ---------- */
 // agy 的模型 ID 已經內含思考強度（例如 gemini-3.8-flash-high），不能再另外加 --effort。
@@ -1566,6 +1877,7 @@ async function openConv(id){
     if (area !== "chat") setArea("chat", true);
     if ((h.project || "") !== project){ project = h.project || ""; store.set("project", project); loadProjects(); }
   }
+  if (id !== convId) window.draftSwitch?.(id);
   convId = id; $("#list").innerHTML = ""; clearSuggestion();
   if (h.created) convHeader(h.created);
   const live = RUNS.get(id);
@@ -1576,9 +1888,9 @@ async function openConv(id){
       const a = addAssistant(); a.bubble.classList.remove("typing");
       if (m.t) a.time.textContent = fmtTime(m.t);
       if (m.timeline) m.timeline.forEach(t => t.k === "think" ? addThought(a, t.text)
-                                           : t.k === "perm" ? actRow(a, "perm", permLine(t)) : actRow(a, "tool", stepLabel(t)));
+                                           : t.k === "perm" ? actRow(a, "perm", permLine(t)) : toolRow(a, t));
       else {
-        (m.steps || []).forEach(t => actRow(a, "tool", stepLabel(t)));
+        (m.steps || []).forEach(t => toolRow(a, t));
         (m.thinking || []).forEach(t => addThought(a, t));
       }
       closeAct(a);
@@ -1651,6 +1963,7 @@ async function fillHome(){
   } catch {}
 }
 function newConv(){
+  if (convId) window.draftSwitch?.(null);
   convId = null; viewDraft = "draft-" + Date.now(); clearSuggestion(); setRunning();
   // 設定裡的「新對話預設模型／聯網搜尋」
   if (savedPrefs.default_model && setModel(savedPrefs.default_model)) store.set("model", currentModel());
@@ -1863,6 +2176,18 @@ function showComponentCard(a, ev){
 }
 
 /* ---------- 時間軸：思考、工具、授權依發生順序排在同一個區塊（參考 Claude Code） ---------- */
+// 工具步驟：模型看圖片（截圖、連拍總覽、生圖）時附上縮圖，點一下放大（像 Claude Code 的過程顯示）
+function toolRow(a, s){
+  const r = actRow(a, "tool", stepLabel(s));
+  const p = (s.params || {}).AbsolutePath || "";
+  if (/\.(png|jpe?g|webp|gif)$/i.test(p)){
+    const i = document.createElement("img");
+    i.className = "thumb actthumb"; i.loading = "lazy"; i.src = fileUrl(p); i.alt = baseName(p);
+    i.onerror = () => i.remove();
+    r.appendChild(i);
+  }
+  return r;
+}
 function actRow(a, kind, content, html){
   const act = a.el.querySelector(".act"), list = act.querySelector(".actlist");
   act.hidden = false;
@@ -2220,7 +2545,7 @@ document.addEventListener("DOMContentLoaded", function(){
     v.querySelector("a").href = url;
     body.innerHTML = "";
     const el = document.createElement(kind === "pdf" ? "iframe" : "img");
-    el.src = url;
+    el.src = kind === "pdf" ? url + "#navpanes=0&view=FitH" : url;   // PDF：不顯示左邊的頁面縮圖，頁面撐滿寬度
     body.appendChild(el);
     v.classList.add("on");
   }
