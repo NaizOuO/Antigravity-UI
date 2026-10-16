@@ -71,6 +71,18 @@ COMPONENTS = {
         "source": "Python 官方套件庫 PyPI（google-antigravity）",
         "check": "google/antigravity/__init__.py",
     },
+    # 語音輸入：whisper.cpp 的辨識伺服器常駐（做法和版本參考 Naiz Studio 的即時字幕）。
+    # 有 NVIDIA 顯示卡用顯示卡版＋turbo 模型（一次辨識約 0.2 秒），沒有就用處理器版＋輕量模型
+    "voice": {
+        "name": "Whisper 語音辨識（離線）",
+        "purpose": "按輸入框的麥克風說話，邊講邊出字；在你自己的電腦上辨識，聲音不會上傳",
+        "version": "whisper.cpp b5130",
+        "size_text": "有 NVIDIA 顯示卡：下載約 1.2 GB；沒有：約 270 MB",
+        "license": "MIT",
+        "source": "whisper.cpp 官方 GitHub 發布＋Hugging Face（ggerganov/whisper.cpp），下載後會核對檢查碼",
+        "voice": True,
+        "check": "voice.json",
+    },
 }
 
 
@@ -232,6 +244,12 @@ def install(cid, progress=lambda done, total, msg="": None, cancel=None):
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
+        if c.get("voice"):
+            _install_voice(work, progress, cancel)
+            dest = folder(cid)
+            shutil.rmtree(dest, ignore_errors=True)
+            work.replace(dest)
+            return
         if c.get("pip"):
             _pip_install(c, work, progress, cancel)
             dest = folder(cid)
@@ -262,6 +280,56 @@ def install(cid, progress=lambda done, total, msg="": None, cancel=None):
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
+
+
+WHISPER_RELEASE = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130"
+WHISPER_MODELS = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+VOICE_FILES = {      # (網址, 大小, SHA-256)：和 Naiz Studio 用的同一批檔案
+    "gpu": [(f"{WHISPER_RELEASE}/whisper-cublas-12.4.0-bin-x64.zip", 674539285,
+             "af520ddd034d985b55dfeea3e465ed93653ba2aee1a55e865033edc548c272a7"),
+            (f"{WHISPER_MODELS}/ggml-large-v3-turbo-q5_0.bin", 574041195,
+             "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2")],
+    "cpu": [(f"{WHISPER_RELEASE}/whisper-bin-x64.zip", 8573270,
+             "f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c"),
+            (f"{WHISPER_MODELS}/ggml-small-q8_0.bin", 264464607,
+             "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f")],
+}
+
+
+def has_nvidia():
+    import subprocess
+    try:
+        return subprocess.run(["nvidia-smi", "-L"], capture_output=True, timeout=10,
+                              creationflags=0x08000000).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _install_voice(work, progress, cancel):
+    """下載辨識程式（zip）和模型，記下伺服器執行檔的位置。"""
+    import json
+    kind = "gpu" if has_nvidia() else "cpu"
+    (exe_zip, zsize, zsha), (murl, msize, msha) = VOICE_FILES[kind]
+    total = zsize + msize
+    archive = _download({"url": exe_zip, "size": zsize, "sha256": zsha}, COMPONENTS_DIR / ".voice.zip",
+                        lambda d, t: progress(d, total, "下載辨識程式"), cancel)
+    progress(zsize, total, "解壓縮中")
+    base = (work / "server").resolve()
+    with zipfile.ZipFile(archive) as zf:
+        for member in zf.namelist():
+            if base not in (work / "server" / member).resolve().parents and (work / "server" / member).resolve() != base:
+                raise RuntimeError(f"壓縮檔內容不安全：{member}")
+        zf.extractall(work / "server")
+    archive.unlink(missing_ok=True)
+    exe = next((work / "server").rglob("whisper-server.exe"), None)
+    if exe is None:
+        raise RuntimeError("下載的辨識程式裡找不到 whisper-server.exe")
+    _download({"url": murl, "size": msize, "sha256": msha}, work / "model.bin",
+              lambda d, t: progress(zsize + d, total, "下載辨識模型"), cancel)
+    progress(total, total, "安裝繁體轉換")              # 辨識結果有時混簡體：用 OpenCC 轉台灣繁體（純 Python，約 1 MB）
+    _pip_install({"pip": "opencc-python-reimplemented==0.1.7"}, work / "py", lambda *a: None, cancel)
+    (work / "voice.json").write_text(json.dumps({"server": str(exe.relative_to(work)), "model": "model.bin",
+                                                 "gpu": kind == "gpu"}), encoding="utf-8")
 
 
 def _pip_install(c, target, progress, cancel):

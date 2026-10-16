@@ -183,6 +183,17 @@ body.busy .acts{display:none}
 #row .hint{flex:1;font-size:12px;color:var(--muted)}
 #attach{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px}
 #mcpBtn{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px;color:var(--muted)}
+#micBtn{border:0;background:none;border-radius:50%;width:34px;height:34px;padding:0;display:inline-grid;place-items:center;color:var(--muted);margin-right:4px}
+#micBtn:hover{background:var(--hover, rgba(127,127,127,.15))}
+#micBtn.on{color:#e5484d;animation:micPulse 1.2s ease-in-out infinite}
+#micBtn.busy{opacity:.5;cursor:progress}
+#micBtn.on{color:#fff;background:var(--accent, #3b82f6);animation:none}
+#micLevel{display:inline-flex;align-items:center;gap:2px;height:20px;margin-right:6px}
+#micLevel[hidden]{display:none}
+#micLevel i{display:block;width:2px;height:2px;border-radius:1px;background:var(--muted);transition:height .08s}
+#ed .vint{color:var(--muted)}
+#ed .vint:empty::before{content:"…"}
+@keyframes micPulse{50%{opacity:.55}}
 #mcpBtn.on{color:var(--accent);border-color:var(--accent)}
 #mcpPanel{border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:4px 0 8px;background:var(--bg);max-height:46vh;overflow:auto;font-size:13px}
 #mcpPanel .mph{display:flex;gap:8px;align-items:center;margin-bottom:6px}
@@ -492,6 +503,8 @@ body.resizing{cursor:col-resize;user-select:none}
         <button id="mcpBtn" title="MCP 工具：讓模型使用其他程式的功能（Naiz Studio、REA…），可以自己加">🔌 工具</button>
         <input type="file" id="fileIn" multiple hidden>
         <span class="hint" id="hint"></span>
+        <span id="micLevel" hidden aria-hidden="true"></span>
+        <button id="micBtn" title="語音輸入" aria-label="語音輸入" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
         <button id="send">送出</button>
       </div>
     </div>
@@ -927,11 +940,10 @@ function showPlanCard(a){
 }
 
 async function send(){
+  if (window.stopVoice) window.stopVoice();
   if (curRun()) return stop();
   const text = $("#input").value.trim();
   if (text) window.inputSent?.(text);
-  const planned = planOn && area === "code" && !!codeWs && !pendingRed;
-  const redFor = pendingRed; pendingRed = null;
   if (!text && !pending.length) return;
   if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
   const files = pending.map(p => p.path);
@@ -941,6 +953,8 @@ async function send(){
 // 送出一輪：一般送出、重新回答、編輯後送出都走這裡（fork = 從哪個對話的第幾則之前分支）
 async function runTurn(text, files, fork){
   let pdfFailures = [], needComp = null;
+  const planned = planOn && area === "code" && !!codeWs && !pendingRed;   // 送出、重新回答、編輯都走這裡，所以在這裡算
+  const redFor = pendingRed; pendingRed = null;
   clearSuggestion();
   if (!convId && !fork && !document.querySelector("#list .convtime")){ clearEmpty(); convHeader(Date.now() / 1000); }
   addUser(text, files);
@@ -1090,6 +1104,127 @@ function addFiles(list){
   }
 }
 $("#attach").onclick = () => $("#fileIn").click();
+
+/* ---------- 語音輸入：離線的 Whisper，邊講邊出字（做法參考 Naiz Studio 的即時字幕） ----------
+   說話時每多 STEP 秒的聲音，就把「這句開頭到現在」重新辨識一次，字會一直長出來（灰色）；
+   停頓 PAUSE 秒就定稿，變成一般文字。排程用聲音的時間：辨識跟不上時下一次自然涵蓋更長的聲音，不會越積越多 */
+(() => {
+  const btn = $("#micBtn"), meter = $("#micLevel"), ed = $("#ed");
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  btn.hidden = false;
+  const RATE = 16000, STEP = 0.6, PAUSE = 0.7, MAX_SENTENCE = 25, PRE_ROLL = 0.3;
+  let rec = null;
+  const bars = Array.from({length: 22}, () => { const i = document.createElement("i"); meter.appendChild(i); return i; });
+  let levels = bars.map(() => 0);
+  function drawLevel(v){
+    levels = [...levels.slice(1), v];
+    bars.forEach((b, i) => { const h = Math.min(1, levels[i] * 9); b.style.height = (h < 0.06 ? 2 : 3 + h * 15) + "px"; });
+  }
+  // ---- 灰色的「講到一半」文字：放在游標的位置，定稿時換成一般文字
+  function interimEl(){
+    if (rec.span && rec.span.isConnected) return rec.span;
+    ed.focus();
+    const sel = getSelection();
+    let r;
+    if (sel.rangeCount && ed.contains(sel.anchorNode)) r = sel.getRangeAt(0);
+    else { r = document.createRange(); r.selectNodeContents(ed.lastElementChild || ed); r.collapse(false); }
+    const span = document.createElement("span"); span.className = "vint"; span.contentEditable = "false";
+    r.deleteContents(); r.insertNode(span);
+    return rec.span = span;
+  }
+  function commit(text){
+    const span = rec.span; rec.span = null;
+    if (!span || !span.isConnected){ if (text) { const s = interimEl(); rec.span = null; return commitAt(s, text); } return; }
+    commitAt(span, text);
+  }
+  function commitAt(span, text){
+    const r = document.createRange(); r.setStartBefore(span); r.collapse(true);
+    span.remove();
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    if (text) document.execCommand("insertText", false, text);   // 走一般輸入：草稿、Markdown 排版都照常
+  }
+  // ---- 送去辨識（同時只送一個；定稿那次要等前一個回來）
+  async function recognize(samples){
+    const pcm = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) pcm[i] = Math.max(-1, Math.min(1, samples[i])) * 32767;
+    let bin = ""; const bytes = new Uint8Array(pcm.buffer);
+    for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 0x8000));
+    let j = await post("/api/voice", {pcm: btoa(bin)});
+    if (j.need){ stopAll(true); if (await askInstall(j.info)) toast("語音辨識已安裝，再按一次麥克風開始說話"); return null; }
+    if (j.error){ toast(j.error); return null; }
+    return j.text || "";
+  }
+  const joined = () => { const n = rec.sentence.reduce((k, c) => k + c.length, 0), out = new Float32Array(n); let i = 0;
+                         for (const c of rec.sentence) { out.set(c, i); i += c.length; } return out; };
+  async function partial(){
+    if (rec.busy) return;
+    rec.busy = true; rec.sentAt = rec.speechSec;
+    const text = await recognize(joined());
+    rec && (rec.busy = false);
+    if (rec && rec.speaking && text != null && text) interimEl().textContent = text;
+  }
+  async function finalize(){
+    const samples = joined(); rec.sentence = []; rec.speaking = false; rec.speechSec = 0; rec.sentAt = 0;
+    while (rec && rec.busy) await new Promise(r => setTimeout(r, 30));
+    if (!rec) return;
+    rec.busy = true;
+    if (rec.span) rec.span.classList.add("final");
+    const text = samples.length > RATE * 0.35 ? await recognize(samples) : "";
+    if (!rec) return;
+    rec.busy = false;
+    commit(text ? text : "");
+  }
+  function onChunk(f){
+    let sum = 0; for (const v of f) sum += v * v;
+    const rms = Math.sqrt(sum / f.length), dur = f.length / RATE;
+    drawLevel(rms);
+    rec.noise = rec.noise == null ? rms : Math.min(rec.noise * 1.002 + 0.00002, rms < rec.noise ? rec.noise * 0.95 + rms * 0.05 : rec.noise);
+    const loud = rms > Math.max(0.012, (rec.noise || 0) * 3);
+    if (!rec.speaking){
+      rec.pre = [...rec.pre, f].slice(-Math.ceil(PRE_ROLL * RATE / f.length));    // 開口前一點點也收進來，第一個字才不會被切掉
+      if (loud){ rec.speaking = true; rec.silence = 0; rec.sentence = [...rec.pre]; rec.speechSec = rec.pre.length * dur; rec.pre = []; }
+      return;
+    }
+    rec.sentence.push(f); rec.speechSec += dur;
+    rec.silence = loud ? 0 : rec.silence + dur;
+    if (rec.silence >= PAUSE || rec.speechSec >= MAX_SENTENCE){ finalize(); return; }
+    if (rec.speechSec - rec.sentAt >= STEP) partial();
+  }
+  async function start(){
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true}}); }
+    catch { toast("瀏覽器沒有允許使用麥克風（網址列左邊可以打開權限），或找不到麥克風"); return; }
+    const ctx = new AudioContext({sampleRate:RATE});
+    const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(2048, 1, 1);
+    rec = {stream, ctx, node, pre:[], sentence:[], speaking:false, silence:0, speechSec:0, sentAt:0, busy:false, span:null, noise:null};
+    node.onaudioprocess = e => rec && onChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(node); node.connect(ctx.destination);
+    btn.classList.add("on"); btn.title = "說完了，停止語音輸入"; meter.hidden = false;
+    // 先叫醒辨識程式（第一次要載入模型）；還沒安裝就先問
+    post("/api/voice", {pcm: ""}).then(j => { if (j.need){ stopAll(true); askInstall(j.info).then(ok => ok && toast("語音辨識已安裝，再按一次麥克風開始說話")); } });
+  }
+  async function stopAll(discard){
+    if (!rec) return;
+    const r = rec;
+    r.node.disconnect(); r.stream.getTracks().forEach(t => t.stop()); r.ctx.close();
+    btn.classList.remove("on"); btn.title = "語音輸入"; meter.hidden = true; levels = levels.map(() => 0); drawLevel(0);
+    if (!discard && r.speaking && r.sentence.length){ await finalize(); }
+    else if (r.span) r.span.remove();
+    rec = null;
+  }
+  async function askInstall(info){
+    if (!confirm(`語音輸入要先下載「${info.name}」\n\n用途：${info.purpose}\n大小：${info.size_text}\n授權：${info.license}\n來源：${info.source}\n\n只需要下載一次。要下載嗎？`)) return false;
+    btn.classList.add("busy");
+    const r = await installComponent("voice", p => {
+      $("#hint").textContent = `${p.msg || "下載中"}　${p.total > 1 ? fmtMB(p.done) + " / " + fmtMB(p.total) : ""}`;
+    });
+    btn.classList.remove("busy"); $("#hint").textContent = "";
+    if (!r.ok){ toast(r.message || "下載失敗"); return false; }
+    return true;
+  }
+  btn.onclick = () => { if (btn.classList.contains("busy")) return; rec ? stopAll(false) : start(); };
+  window.stopVoice = () => stopAll(false);
+})();
 $("#fileIn").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
 $("#input").addEventListener("paste", e => {
   const fs = [...(e.clipboardData?.files || [])];
@@ -1275,32 +1410,32 @@ $("#send").onclick = send;
   }
 
   // ---- 打字時的轉換規則：行首的 "- " "1. " "> "
+  // 中文輸入法打的空白是在「組字中」送出的：那次 input 會被跳過，所以組字結束時再檢查一次
+  function autoFormat(){
+    const b = block();
+    const mdBefore = toMd(true);                 // 自動排版前的樣子（給 Ctrl+Z 用）
+    // 只在「剛打下標記後面的空白」那一刻轉換；Ctrl+Z 變回文字的那一行會標記 literal，之後繼續打字不會再被轉掉
+    if (!b || b.tagName !== "P" || b.dataset.literal) return;
+    const t = b.textContent.replace(/\u00a0/g, " ");
+    let m;
+    if ((m = t.match(/^\s*([-*+－])\s(.*)$/s)) || (m = t.match(/^\s*(\d+)(?:[.)]\s|[。．）]\s?)(.*)$/s))){
+      const ordered = /\d/.test(m[1]), list = document.createElement(ordered ? "ol" : "ul");
+      if (ordered && +m[1] !== 1) list.start = +m[1];
+      const li = make("li", m[2]); list.appendChild(li);
+      const prev = b.previousElementSibling;          // 和上一個同種清單接起來
+      if (prev && prev.tagName === list.tagName){ prev.appendChild(li); b.remove(); }
+      else b.replaceWith(list);
+      caretTo(li, true); undoMd = mdBefore;
+    } else if ((m = t.match(/^\s*>\s(.*)$/s))){
+      const q = make("blockquote", m[1]); b.replaceWith(q); caretTo(q, true); undoMd = mdBefore;
+    }
+  }
   ed.addEventListener("input", e => {
     normalize();
-    if (!e.isComposing){
-      const b = block();
-      const mdBefore = toMd(true);                 // 自動排版前的樣子（給 Ctrl+Z 用）
-      // 只在「剛打下標記後面的空白」那一刻轉換；Ctrl+Z 變回文字後繼續打字不會又被轉掉
-      // Ctrl+Z 變回文字的那一行會標記 literal，之後繼續打字也不會再被轉掉
-      if (b && b.tagName === "P" && !b.dataset.literal && /^\s*([-*+－]|\d+[.)]|>)[\s 　]/.test(b.textContent)){
-        const t = b.textContent.replace(/ /g, " ");
-        let m;
-        if ((m = t.match(/^([-*+－])\s(.*)$/s)) || (m = t.match(/^(\d+)[.)]\s(.*)$/s))){
-          const ordered = /\d/.test(m[1]), list = document.createElement(ordered ? "ol" : "ul");
-          if (ordered && +m[1] !== 1) list.start = +m[1];
-          const li = make("li", m[2]); list.appendChild(li);
-          // 和上一個同種清單接起來
-          const prev = b.previousElementSibling;
-          if (prev && prev.tagName === list.tagName){ prev.appendChild(li); b.remove(); }
-          else b.replaceWith(list);
-          caretTo(li, true); undoMd = mdBefore;
-        } else if ((m = t.match(/^>\s(.*)$/s))){
-          const q = make("blockquote", m[1]); b.replaceWith(q); caretTo(q, true); undoMd = mdBefore;
-        }
-      }
-    }
+    if (!e.isComposing) autoFormat();
     sync(); $("#box").classList.toggle("has-sug", !!suggestion && !ta.value);
   });
+  ed.addEventListener("compositionend", () => { normalize(); autoFormat(); sync(); });
 
   // ---- 參考 Claude Code 的輸入框：歷史、草稿、復原自動排版、方向鍵離開區塊
   const store2 = {get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },

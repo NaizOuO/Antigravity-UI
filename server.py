@@ -3,6 +3,7 @@
 
 介面上的文字 / 圖片 / 檔案 -> 以 `agy -p` 子程序執行 -> 把串流結果回傳到網頁。
 """
+import atexit
 import base64
 import glob
 import json
@@ -1197,6 +1198,107 @@ SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並
 LOCAL_PREFIX = "local:"
 
 
+VOICE = {"proc": None, "port": None}
+VOICE_LOCK = threading.Lock()
+VOICE_PROMPT = "以下是繁體中文的句子，可能夾雜英文。"
+
+
+def voice_server():
+    """whisper.cpp 的辨識伺服器：第一次用時啟動，之後常駐（模型只載入一次）。做法參考 Naiz Studio 的即時字幕。"""
+    if VOICE["proc"] is not None and VOICE["proc"].poll() is None:
+        return VOICE["port"]
+    base = components.folder("voice")
+    info = json.loads((base / "voice.json").read_text(encoding="utf-8"))
+    import socket
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    threads = max(1, min(8, (os.cpu_count() or 4) - 2))
+    args = [str(base / info["server"]), "-m", info["model"], "--host", "127.0.0.1", "--port", str(port),
+            "-l", "zh", "-nt", "-t", str(threads)] + ([] if info.get("gpu") else ["-ac", "768"])
+    pidf = base / ".pid"                          # 上次 Lumina 被直接關掉時留下的辨識程式：先結束，不要佔著顯示卡
+    try:
+        pid = str(int(pidf.read_text().strip()))
+        seen = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True,
+                              text=True, creationflags=NO_WINDOW).stdout
+        if "whisper-server.exe" in seen.lower():       # PID 可能已經被別的程式重複使用：確認是辨識程式才結束
+            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, creationflags=NO_WINDOW)
+    except (OSError, ValueError):
+        pass
+    # 模型用「工作目錄＋純英文檔名」傳：whisper.cpp 開不了含中文的路徑
+    VOICE["proc"] = subprocess.Popen(args, cwd=str(base), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    VOICE["port"] = port
+    pidf.write_text(str(VOICE["proc"].pid))
+    end = time.time() + 120
+    while time.time() < end:
+        if VOICE["proc"].poll() is not None:
+            raise RuntimeError("語音辨識程式無法啟動（可能是顯示卡記憶體不夠）")
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
+            return port
+        except OSError:
+            time.sleep(0.2)
+    raise RuntimeError("語音辨識程式載入太久")
+
+
+def transcribe(pcm16):
+    """16 kHz 單聲道 16-bit PCM → 文字。"""
+    import io
+    import wave
+    with VOICE_LOCK:
+        port = voice_server()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(pcm16[-30 * 32000:])
+        bd = uuid.uuid4().hex
+        body = (f"--{bd}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{VOICE_PROMPT}\r\n"
+                f"--{bd}\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n0.0\r\n"
+                f"--{bd}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n"
+                "Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{bd}--\r\n".encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/inference", body,
+                                     {"Content-Type": f"multipart/form-data; boundary={bd}"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            text = json.loads(r.read()).get("text", "")
+    text = to_traditional(re.sub(r"\s*\n\s*", "", text).strip())
+    text = re.sub(r"(?<=[一-鿿]),\s*", "，", text)          # 中文之間的半形標點換成全形
+    text = re.sub(r"(?<=[一-鿿])\?", "？", re.sub(r"(?<=[一-鿿])!", "！", text))
+    return "" if text.strip("。，,.! ") == "" or text in ("謝謝觀看", "謝謝大家", "字幕由Amara.org社區提供") else text
+
+
+OPENCC = {}
+
+
+def to_traditional(text):
+    """辨識結果有時混簡體：用 OpenCC 轉台灣繁體（只轉字形）。"""
+    if "cc" not in OPENCC:
+        py = components.folder("voice") / "py"
+        try:
+            if str(py) not in sys.path:
+                sys.path.insert(0, str(py))
+            from opencc import OpenCC
+            OPENCC["cc"] = OpenCC("s2tw")       # 只轉字，不換詞（s2twp 會把「文件」換成「檔案」）
+        except Exception:
+            OPENCC["cc"] = None
+    return OPENCC["cc"].convert(text) if OPENCC["cc"] else text
+
+
+def warm_voice():
+    try:
+        with VOICE_LOCK:
+            voice_server()
+    except Exception:
+        pass                           # 真的要辨識時會再試一次，錯誤在那時候回報
+
+
+def stop_voice():
+    if VOICE["proc"] is not None and VOICE["proc"].poll() is None:
+        VOICE["proc"].kill()
+
+
+atexit.register(stop_voice)
+
+
 def local_group(url):
     return "LM Studio" if ":1234" in url else "Ollama" if ":11434" in url else "本地模型"
 
@@ -2308,6 +2410,17 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self.send_json({"decision": "deny", "reason": "無法讀取工具呼叫"})
             return self.send_json(decide_tool(payload))
+        if u.path == "/api/voice":                # 語音輸入：瀏覽器錄好的 PCM → 文字（在本機辨識）
+            if not components.installed("voice"):
+                return self.send_json({"need": "voice", "info": components.status()["voice"]})
+            try:
+                pcm = base64.b64decode(self.body().get("pcm") or "")
+                if not pcm:                       # 按下麥克風時先叫醒辨識程式（第一次要載入模型）
+                    threading.Thread(target=warm_voice, daemon=True).start()
+                    return self.send_json({"text": ""})
+                return self.send_json({"text": transcribe(pcm) if len(pcm) > 3200 else ""})
+            except Exception as e:
+                return self.send_json({"error": f"語音辨識失敗：{e}"})
         if u.path == "/api/stop/hook":            # agy 的 Stop hook：模型要結束前的完成檢查
             try:
                 return self.send_json(decide_stop(self.body()))
