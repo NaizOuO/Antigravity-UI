@@ -120,6 +120,40 @@ TASKS["zelda3_py"] = {"seed": "seeds/zelda3", "verify": "verify/launch.py", "fol
                       "prompt": ZELDA3_FIRST.format(ver="版本 A（Python + Ursina）")}
 TASKS["zelda3_web"] = {"seed": "seeds/zelda3", "verify": "verify/launch.py", "verify_args": ["index.html"],
                        "followups": ZELDA3_ROUNDS, "prompt": ZELDA3_FIRST.format(ver="版本 B（網頁 + Three.js）")}
+# 遊戲以外：自動化工具（檔案安全）
+ORGANIZE = ("幫我做一個整理「下載」資料夾的小工具：依檔案類型分到不同資料夾（圖片、文件之類的），"
+            "內容一模一樣的重複檔案挑出來放到「重複檔案」資料夾。我怕搬錯，所以要能先預覽會怎麼搬，搬完不滿意要能復原。\n"
+            "\n為了自動驗收，請做成 organize.py，用法：\n"
+            "- python organize.py <資料夾> --dry-run：只顯示會怎麼整理，不動任何檔案\n"
+            "- python organize.py <資料夾>：整理（子資料夾裡的檔案也要整理）\n"
+            "- python organize.py <資料夾> --undo：復原上一次的整理")
+TASKS["organize"] = {"verify": "verify/organizer.py", "prompt": ORGANIZE}
+# 爬蟲（評分時連到本機的假 PTT，不會真的去爬）
+SCRAPER = ("幫我做一個爬蟲，每天抓 PTT 八卦板熱門文章的標題、推文數、網址，存成 CSV，重複的不要存。\n"
+           "\n為了自動驗收，請做成 scraper.py，用法：\n"
+           "python scraper.py --base <網站網址，預設 https://www.ptt.cc> --pages <往前抓幾頁> --min-push <推文數門檻> --out <CSV 檔>\n"
+           "CSV 要有「標題」「推文數」「網址」三個欄位（可以有其他欄位）；推文「爆」算 100，X1～XX 是噓文（負的）。")
+TASKS["scraper"] = {"verify": "verify/scraper.py", "prompt": SCRAPER}
+# 網頁應用（設計＋功能）
+BUDGET = ("幫我做一個好看的個人記帳網頁：可以記收入和支出、分類、看每個月的統計圖，關掉再打開資料還在，可以匯出 CSV。"
+          "手機和電腦都要好用。\n"
+          "\n為了自動驗收：做成 index.html（用瀏覽器打開就能用，不需要伺服器或安裝），元素加上這些 data-testid：\n"
+          "amount（金額輸入）、type（<select>，選項 value 是 income／expense）、category（分類，<select> 或 <input>）、"
+          "date（<input type=\"date\">）、note（備註）、add（新增按鈕；編輯時也可以用它儲存，或另外做 data-testid=\"save\" 的儲存鍵）、"
+          "record（每一筆紀錄）、edit／delete（紀錄裡的編輯、刪除按鈕）、month（<input type=\"month\">，選要看的月份）、"
+          "month-income／month-expense／month-balance（該月的收入、支出、結餘數字）、chart（統計圖的容器，裡面用 canvas 或 svg）、"
+          "export（匯出 CSV 的按鈕）。")
+TASKS["budget"] = {"verify": "verify/budget_web.py", "grader_venv": True, "prompt": BUDGET}
+
+PLAN_GO = ("照 SPEC.md 開始實作。先把「驗收標準」寫成驗收測試並用 acceptance_set 登記，再寫程式；"
+           "做完用 design_review（phase=review）對照 SPEC.md 審查，缺的補齊。")
+# 規劃模式：第一輪只寫 SPEC.md，第二輪照規格實作（模擬使用者直接按「照規格開始實作」）
+TASKS["organize_plan"] = {**TASKS["organize"], "plan": True, "followups": [PLAN_GO]}
+TASKS["scraper_plan"] = {**TASKS["scraper"], "plan": True, "followups": [PLAN_GO]}
+TASKS["budget_plan"] = {**TASKS["budget"], "plan": True, "followups": [PLAN_GO]}
+# 通用迴圈：規劃 → 實作 → 找碴 → 修正（用來和「有領域清單」的版本比較）
+for _k in ("organize", "scraper", "budget"):
+    TASKS[_k + "_loop"] = {**TASKS[_k], "plan": True, "followups": [PLAN_GO], "redteam": True}
 # 協作：Claude 寫規格書（SPEC.md）和驗收測試，Lumina 實作
 TASKS["pacman_spec"] = {
     "seed": "seeds/pacman_spec", "verify": "verify/pacman.py", "verify_args": ["spec"], "launch": True,
@@ -194,7 +228,8 @@ def run_one(name, model, note, tag=""):
         if n:
             say(f"[{time.time() - t0:4.0f}s] 第 {n + 1} 輪")
         try:
-            body = {"text": text, "model": model, "code": ws["id"], **({"conversation_id": cid} if cid else {})}
+            body = {"text": text, "model": model, "code": ws["id"], **({"conversation_id": cid} if cid else {}),
+                    **({"plan": True} if n == 0 and task.get("plan") else {})}
             for line in post("/api/chat", body):
                 e = json.loads(line)
                 ev = e.get("event")
@@ -218,10 +253,43 @@ def run_one(name, model, note, tag=""):
             err = f"{type(e).__name__}: {e}"
         if err:
             break
+
+    # 找碴：獨立的新對話寫測試把程式弄壞，有問題就交回原本的對話修（模擬使用者按「找碴」再按「交給原對話修正」）
+    red = {"count": None}
+    if task.get("redteam") and cid and not err:
+        def stream(body, tag):
+            nonlocal asks, tokens, tools
+            out = {}
+            for line in post("/api/chat", body):
+                e = json.loads(line)
+                su = e.get("step_update") or {}
+                if su.get("step_type") == "tool" and su.get("state") == "ACTIVE":
+                    tools += 1
+                if e.get("event") == "permission":
+                    asks += 1
+                    post("/api/permission/answer", {"id": e["id"], "nonce": e["nonce"],
+                                                    "choice": "conv" if e.get("can_conv") else "once"}).read()
+                if e.get("event") == "result":
+                    tokens += (e["result"].get("usage") or {}).get("turn_tokens") or 0
+                if e.get("event") == "redteam_report":
+                    out["report"] = e
+                if e.get("event") == "done":
+                    out["error"] = e.get("error")
+            say(f"[{time.time() - t0:4.0f}s] {tag}結束")
+            return out
+        say(f"[{time.time() - t0:4.0f}s] 找碴開始")
+        r = stream({"text": "（找碴）", "model": model, "code": ws["id"], "redteam_for": cid}, "找碴")
+        rep = r.get("report") or {}
+        red["count"] = rep.get("count")
+        say(f"找碴找到 {rep.get('count')} 個問題")
+        if rep.get("count", 0) > 0:
+            stream({"text": rep["fix_text"], "model": model, "code": ws["id"], "conversation_id": cid}, "修正")
     secs = round(time.time() - t0)
 
     # 用題目自己的驗證程式檢查（跑在題目資料夾的 .venv 裡）
     py = folder / ".venv" / "Scripts" / "python.exe"
+    if task.get("grader_venv"):            # 評分程式自己需要的套件（例如 playwright）：用 bench/.venv
+        py = HERE / ".venv" / "Scripts" / "python.exe"
     v = subprocess.run([str(py if py.exists() else sys.executable), str(HERE / task["verify"]), str(folder),
                         *task.get("verify_args", [])],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
@@ -241,7 +309,7 @@ def run_one(name, model, note, tag=""):
             verdict["total"] += lr["total"]
     row = {"t": time.strftime("%Y-%m-%d %H:%M"), "task": name, "model": model, "folder": folder.name, "note": note,
            "batch": tag, "seconds": secs, "tokens": tokens, "asks": asks, "tool_calls": tools, "error": err,
-           "conversation": cid, **diff_stats(HERE / task["seed"] if task.get("seed") else None, folder), **verdict}
+           "conversation": cid, "redteam_found": red["count"], **diff_stats(HERE / task["seed"] if task.get("seed") else None, folder), **verdict}
     with WRITE_LOCK, open(HERE / "results.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     short = {k: row.get(k) for k in ("folder", "passed", "total", "regression", "feature", "seconds", "tokens",

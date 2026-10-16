@@ -20,7 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 LEGACY_ASSET = False                # 改名 Lumina 的過渡期：同時附上舊檔名的安裝檔
-PROGRAM_FILES = ["server.py", "version.py", "updater.py", "components.py", "command_guard.py", "checkpoints.py", "tools/lumina.py", "tools/lumina_mcp.py", "tools/lumina_web.py", "static/index.html",
+PROGRAM_FILES = ["server.py", "version.py", "updater.py", "components.py", "command_guard.py", "checkpoints.py", "tools/lumina.py", "tools/lumina_mcp.py", "tools/lumina_web.py", "tools/local_backend.py", "static/index.html",
+                 "templates/agents/rules/lumina.md", "templates/agents/rules/lumina-plan.md", "templates/agents/rules/lumina-field-check.md",
+                 "templates/agents/skills/lumina-visual-verify/SKILL.md",
                  "skills/pdf-document/SKILL.md", "skills/pdf-document/references/packages.md",
                  "skills/pdf-document/references/notes.typ", "skills/pdf-document/references/report.typ",
                  "skills/pdf-document/references/slides.typ", "skills/pdf-document/references/letter.typ", "static/icon.png", "static/icon.ico",

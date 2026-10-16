@@ -182,6 +182,25 @@ body.busy .acts{display:none}
 #row{display:flex;align-items:center;gap:8px}
 #row .hint{flex:1;font-size:12px;color:var(--muted)}
 #attach{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px}
+#mcpBtn{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px;color:var(--muted)}
+#mcpBtn.on{color:var(--accent);border-color:var(--accent)}
+#mcpPanel{border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:4px 0 8px;background:var(--bg);max-height:46vh;overflow:auto;font-size:13px}
+#mcpPanel .mph{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+#mcpPanel .mph button{border:0;background:none;color:var(--muted)}
+#mcpPanel .mrow,#mcpPanel .msrv{display:flex;gap:8px;align-items:center;padding:4px 0}
+#mcpPanel .msrv .meta{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mcpPanel .msrv button{border:0;background:none;color:var(--muted)}
+#mcpPresets{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#mcpPresets button,#mcpAdd{border:1px solid var(--border);background:none;border-radius:8px;padding:3px 8px;font-size:12px}
+#mcpPanel .mform{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+#mcpPanel .mform input,#mcpPanel .mform textarea{border:1px solid var(--border);border-radius:6px;padding:5px 7px;background:none;color:var(--text);font:inherit;font-size:12px}
+#mcpPanel .mform textarea{height:70px;font-family:Consolas,monospace}
+#mcpPanel .warn{color:var(--muted)}
+#planBtn{border:1px solid var(--border);background:none;border-radius:8px;padding:5px 10px;color:var(--muted)}
+#planBtn.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.plancard{margin-top:10px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.plancard .pt{flex:1;min-width:200px;font-size:13px;color:var(--muted)}
+.plancard button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:6px 12px}
 #send{border:0;background:var(--accent);color:var(--accent-text);border-radius:8px;padding:6px 16px;font-weight:600}
 #send.stop{background:var(--danger)}
 #send:disabled{opacity:.5;cursor:default}
@@ -408,6 +427,7 @@ body.resizing{cursor:col-resize;user-select:none}
 #viewer img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;background:#111}
 #viewer iframe{width:100%;height:100%;border:0;border-radius:8px;background:#525659}
 .bubble img.thumb{cursor:zoom-in}
+.bubble .emo{filter:grayscale(1);opacity:.6;font-size:.9em}
 </style>
 </head>
 <body>
@@ -430,7 +450,6 @@ body.resizing{cursor:col-resize;user-select:none}
     <button class="ghost" id="toggleSide" title="顯示側欄">☰</button>
     <label>模型 <select id="family"><option>載入中…</option></select></label>
     <label title="只列出這個模型實際支援的強度">思考強度 <select id="effort"></select></label>
-    <button class="ghost" id="searchBtn" title="開啟後會要求模型先上網搜尋並附來源（關閉時模型仍可能自己決定搜尋）">🌐 聯網搜尋</button>
     <span class="sp"></span>
     <button class="ghost on" id="updBtn" hidden></button>
     <button class="ghost" id="projChip" title="管理專案檔案與指示"></button>
@@ -452,8 +471,25 @@ body.resizing{cursor:col-resize;user-select:none}
       <div id="chips"></div>
       <textarea id="input" rows="2" placeholder="問點什麼…（Enter 送出，Shift+Enter 換行）" hidden></textarea>
       <div id="ed" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false"></div>
+      <div id="mcpPanel" hidden>
+        <div class="mph"><b>MCP 工具</b><span class="meta">開著的工具，模型使用前都會先詢問你</span><span class="sp"></span><button id="mcpClose">✕</button></div>
+        <div id="mcpList"></div>
+        <div id="mcpPresets"></div>
+        <details id="mcpNew"><summary>＋ 新增 MCP 工具</summary>
+          <div class="mform">
+            <input id="mcpName" placeholder="名稱（英文，例如 my-tool）">
+            <input id="mcpCmd" placeholder="指令（例如 npx、python、C:\路徑\程式.exe）">
+            <input id="mcpArgs" placeholder="參數，用空白分開（例如 -y some-mcp-server）">
+            <div class="meta">或直接貼上 mcp.json（Cursor、LM Studio、Claude 的格式都可以）：</div>
+            <textarea id="mcpJson" placeholder='{"mcpServers": {"名稱": {"command": "...", "args": ["..."]}}}'></textarea>
+            <div class="mrow"><button id="mcpAdd">加入</button><span class="meta" id="mcpMsg"></span></div>
+            <div class="meta warn">只加入你信任的來源：MCP 工具可以執行程式、讀寫檔案、連網。</div>
+          </div>
+        </details>
+      </div>
       <div id="row">
         <button id="attach" title="附加檔案">📎 附件</button>
+        <button id="mcpBtn" title="MCP 工具：讓模型使用其他程式的功能（Naiz Studio、REA…），可以自己加">🔌 工具</button>
         <input type="file" id="fileIn" multiple hidden>
         <span class="hint" id="hint"></span>
         <button id="send">送出</button>
@@ -518,7 +554,11 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">選「Ctrl+Enter 送出」時，Enter 是換行，打長篇推導或貼程式碼不會手滑送出。</p>
       <div class="srow"><b>新對話的預設模型</b><span class="sp"></span><select data-key="default_model" id="defModel"></select></div>
       <p class="note">選「沿用上次用的」時，會記住你最後選的模型。</p>
-      <div class="srow"><b>新對話預設開啟聯網搜尋</b><span class="sp"></span><label class="tg"><input type="checkbox" data-key="default_search"><i></i></label></div>
+      <div class="srow"><b>本地模型伺服器</b><span class="sp"></span><input data-key="local_url" class="sinput" style="width:260px"></div>
+      <div class="srow"><b>本地模型</b><span class="sp"></span><input data-key="local_models" class="sinput" style="width:260px"></div>
+      <p class="note">用你電腦上的模型回答（不用網路、不用額度）。先安裝並開啟 Ollama（網址 http://localhost:11434/v1）或 LM Studio（http://localhost:1234/v1），
+      模型名稱用逗號分隔，例如 qwen3:8b, qwen3:14b，儲存後會出現在模型選單的「本地 · …」。第一次使用會詢問要不要下載 Antigravity SDK（約 90 MB）。
+      小模型比較會寫錯工具呼叫，建議用支援工具呼叫的模型（例如 Qwen3）。</p>
       <div class="srow"><b>常駐指示</b></div>
       <p class="note">每個新對話的第一則訊息前會自動附上這段文字（例如你的科系、回答語言、偏好的說明方式）。</p>
       <textarea data-key="instructions" class="sarea"></textarea>
@@ -665,6 +705,8 @@ function renderMd(src){
   html = html.replace(/href="file:\/\/\/([^"]+)"/g, (_, p) => `href="/api/file?p=${encodeURIComponent(decodeURIComponent(p).replace(/\//g,'\\'))}" target="_blank"`);
   html = html.replace(/<a href="\/api\/file\?p=/g, '<a target="_blank" href="/api/file?p=');
   html = html.replace(/<img ([^>]*?)src="\/api\/file\?p=/g, '<img class="genimg" $1src="/api/file?p=');
+  // 模型還是用了 emoji 的話，用單色顯示（只換標籤外的文字），版面不會五顏六色
+  html = html.replace(/(^|>)([^<]+)/g, (m, a, t) => a + t.replace(/(\p{Extended_Pictographic}️?)/gu, '<span class="emo">$1</span>'));
   return html;
 }
 
@@ -775,7 +817,8 @@ const msgEls = () => [...document.querySelectorAll("#list > .msg")];
 function paintActions(){
   const all = msgEls(), lastA = all.filter(e => e.classList.contains("assistant")).pop();
   document.body.classList.toggle("busy", !!curRun());
-  all.forEach(e => e.querySelector(".retry")?.toggleAttribute("hidden", e !== lastA));
+  all.forEach(e => { e.querySelector(".retry")?.toggleAttribute("hidden", e !== lastA);
+                     e.querySelector(".redteam")?.toggleAttribute("hidden", e !== lastA); });
 }
 function truncateFrom(el){            // 把 el 和它之後的訊息從畫面上拿掉，回傳 el 前面還有幾則
   const all = msgEls(), k = all.indexOf(el);
@@ -843,10 +886,52 @@ function stepLabel(s){
 }
 
 /* ---------- sending ---------- */
+/* ---------- 找碴：獨立的對話專門寫測試把程式弄壞，問題交回原本的對話修 ---------- */
+let pendingRed = null;
+function startRedteam(){
+  if (!convId || area !== "code"){ toast("先在 Code 區完成一段工作，再對它找碴"); return; }
+  pendingRed = convId;
+  $("#input").value = "（找碴：獨立檢查上一段對話寫的程式）";
+  send();
+}
+function showRedteamCard(a, ev){
+  const c = document.createElement("div"); c.className = "plancard";
+  if (ev.count < 0){ c.innerHTML = `<span class="pt">找碴沒有產生 redteam/report.json，看不到結果。可以按「↻ 重新回答」再試一次。</span>`; }
+  else if (!ev.count){ c.innerHTML = `<span class="pt">找碴沒有找到確認的問題（測試放在工作資料夾的 redteam/）。</span>`; }
+  else {
+    c.innerHTML = `<span class="pt">找到 ${ev.count} 個問題，測試放在 redteam/。交回原本的對話修正？</span><button>▶ 交給原對話修正</button>`;
+    c.querySelector("button").onclick = async () => {
+      c.remove();
+      await openConv(ev.for);
+      $("#input").value = ev.fix_text; send();
+    };
+  }
+  a.el.insertBefore(c, a.meta);
+}
+
+/* ---------- 規劃模式（Code 區）：這一輪只寫 SPEC.md，確認後再實作 ---------- */
+const PLAN_GO = "照 SPEC.md 開始實作。先把「驗收標準」寫成驗收測試並用 acceptance_set 登記，再寫程式；做完用 design_review（phase=review）對照 SPEC.md 審查，缺的補齊。";
+const planKey = () => "plan." + (codeWs || "");
+let planOn = false;
+// localStorage 只存字串：用 "1"／"" 表示開關（存 false 會變成字串 "false"，讀回來是真值，就關不掉了）
+function paintPlan(){ planOn = false; }
+// 「先規劃」「找碴」按鈕已拿掉：模型自己判斷要不要先問清楚、什麼時候叫找碴子代理（像 Claude Code）
+function showPlanCard(a){
+  const c = document.createElement("div"); c.className = "plancard";
+  c.innerHTML = `<span class="pt">📋 規格書已寫在工作資料夾的 SPEC.md。想修改就直接在下面說；沒問題就開始實作。</span><button>▶ 照規格開始實作</button>`;
+  c.querySelector("button").onclick = () => {
+    store.set(planKey(), ""); paintPlan(); c.remove();
+    $("#input").value = PLAN_GO; send();
+  };
+  a.el.insertBefore(c, a.meta);
+}
+
 async function send(){
   if (curRun()) return stop();
   const text = $("#input").value.trim();
   if (text) window.inputSent?.(text);
+  const planned = planOn && area === "code" && !!codeWs && !pendingRed;
+  const redFor = pendingRed; pendingRed = null;
   if (!text && !pending.length) return;
   if (pending.some(p => p.uploading)) { $("#hint").textContent = "附件還在上傳…"; return; }
   const files = pending.map(p => p.path);
@@ -873,7 +958,8 @@ async function runTurn(text, files, fork){
     const res = await fetch("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({text, files, model:currentModel(),
                             conversation_id: fork ? null : convId, fork, search:searchOn,
-                            project: area === "code" ? "" : project, code: area === "code" ? codeWs : ""})});
+                            project: area === "code" ? "" : project, code: area === "code" ? codeWs : "",
+                            plan: planned, redteam_for: redFor})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -915,6 +1001,7 @@ async function runTurn(text, files, fork){
         if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
         if (ev.event === "code_fixing"){ st.set(ev.name === "驗收測試" ? `驗收測試沒通過，自動修正中（第 ${ev.attempt} 次）`
                                                                     : `${ev.name} 編譯有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "stop_check"){ actRow(a, "perm", stopLine(ev)); }
         if (ev.event === "accept_checking"){ st.set("回答完成，介面正在重跑驗收測試…"); }
         if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
@@ -924,6 +1011,7 @@ async function runTurn(text, files, fork){
         }
         if (ev.event === "permission") showPermissionCard(a, ev, st);
         if (ev.event === "checkpoint") showCheckpoint(a, ev);
+        if (ev.event === "redteam_report") showRedteamCard(a, ev);
         if (ev.event === "thinking") addThought(a, ev.text);
         if (ev.event === "compacted" || ev.event === "compact_soon"){
           const n = document.createElement("div"); n.className = "permnote ok";
@@ -935,6 +1023,7 @@ async function runTurn(text, files, fork){
         if (ev.event === "permission_done") showPermissionNote(a, ev);
         if (ev.event === "done"){
           if (ev.conversation_id){ rekey(ev.conversation_id); loadHistory(); }
+          if (planned && !ev.error) showPlanCard(a);
           if (ev.error && !reply){ a.bubble.innerHTML = `<div class="err">${escapeHtml(ev.error)}</div>`; }
           if (ev.model_gone){ a.meta.textContent = ""; loadModels(true); }   // 模型被拿掉：重抓清單，自動改選可用的模型
         }
@@ -1389,7 +1478,7 @@ function groupModels(models){
   for (const m of models){
     const mm = m.id.match(/^(.*)-(low|medium|high)$/);
     const key = mm ? mm[1] : m.id, level = mm ? mm[2] : "";
-    if (!map.has(key)) map.set(key, {key, name:m.name.replace(/\s*\((Low|Medium|High)\)\s*$/, ""), variants:[]});
+    if (!map.has(key)) map.set(key, {key, name:m.name.replace(/\s*\((Low|Medium|High)\)\s*$/, ""), group:m.group || "Antigravity", variants:[]});
     map.get(key).variants.push({id:m.id, level});
   }
   return [...map.values()];
@@ -1422,7 +1511,11 @@ async function loadModels(refresh = true, cached = false){
     $("#banner").hidden = !j.error; $("#banner").textContent = j.error ? "⚠ " + j.error : "";
     families = groupModels(j.models);
     sel.innerHTML = "";
-    for (const f of families){ const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; sel.appendChild(o); }
+    const groups = new Map();                     // 分組顯示：Antigravity（雲端）、LM Studio／Ollama（本地）
+    for (const f of families){
+      if (!groups.has(f.group)){ const g = document.createElement("optgroup"); g.label = f.group; groups.set(f.group, g); sel.appendChild(g); }
+      const o = document.createElement("option"); o.value = f.key; o.textContent = f.name; groups.get(f.group).appendChild(o);
+    }
     if (!families.length){ sel.innerHTML = `<option value="">（取不到模型清單，用預設）</option>`; return; }
     if (!setModel(saved)){
       // 上次選的模型已經下架（例如 11/2 Claude 4.6 退役）：改用伺服器建議的同系列替代模型
@@ -1440,9 +1533,9 @@ $("#family").onchange = e => {
 $("#effort").onchange = () => { store.set("model", currentModel()); paintUsage(); };
 
 /* ---------- web search toggle ---------- */
-let searchOn = store.get("search", "0") === "1";
-function paintSearch(){ $("#searchBtn").classList.toggle("on", searchOn); }
-$("#searchBtn").onclick = () => { searchOn = !searchOn; store.set("search", searchOn ? "1" : "0"); paintSearch(); };
+// 「聯網搜尋」按鈕已移除：模型需要時會自己上網查（伺服器每段對話都附上查資料的規則），不用另外開
+const searchOn = false;
+const paintSearch = () => {};
 paintSearch();
 
 /* ---------- usage ---------- */
@@ -1585,6 +1678,7 @@ const curWs = () => workspaces.find(w => w.id === codeWs) || null;
 function setArea(a, keepConv){
   area = a; store.set("area", a);
   document.body.classList.toggle("area-code", a === "code");
+  if (typeof paintPlan === "function") paintPlan();
   document.querySelectorAll("#areaTabs button").forEach(b => b.classList.toggle("on", b.dataset.area === a));
   $("#newBtn").textContent = a === "code" ? "＋ 新的工作階段" : "＋ 新對話";
   if (!keepConv) newConv();
@@ -1594,9 +1688,13 @@ function setArea(a, keepConv){
 document.querySelectorAll("#areaTabs button").forEach(b => b.onclick = () => { if (b.dataset.area !== area) setArea(b.dataset.area); });
 let codeLoad = 0;
 async function loadCode(){
+  paintPlan();
   const token = ++codeLoad;               // 同時被叫兩次時，只用最後一次的結果（不然資料夾會重複出現）
-  const ws = (await (await fetch("/api/code")).json()).items;
-  const lists = await Promise.all(ws.map(w => fetch("/api/history?code=" + w.id).then(r => r.json()).then(j => j.items)));
+  // 一次拿全部工作區的工作階段（以前每個工作區各問一次，工作區一多就要等好幾秒）
+  const [ws, groups] = await Promise.all([fetch("/api/code").then(r => r.json()).then(j => j.items),
+                                          fetch("/api/history?by_code=1").then(r => r.json()).then(j => j.groups)]);
+  const lists = groups ? ws.map(w => groups[w.id] || [])            // 舊版伺服器沒有 by_code：退回逐一查詢
+                       : await Promise.all(ws.map(w => fetch("/api/history?code=" + w.id).then(r => r.json()).then(j => j.items)));
   if (token !== codeLoad) return;
   workspaces = ws;
   if (codeWs && !curWs()) codeWs = "";
@@ -1888,7 +1986,7 @@ async function openConv(id){
       const a = addAssistant(); a.bubble.classList.remove("typing");
       if (m.t) a.time.textContent = fmtTime(m.t);
       if (m.timeline) m.timeline.forEach(t => t.k === "think" ? addThought(a, t.text)
-                                           : t.k === "perm" ? actRow(a, "perm", permLine(t)) : toolRow(a, t));
+                                           : t.k === "perm" ? actRow(a, "perm", permLine(t)) : t.k === "stop" ? actRow(a, "perm", stopLine(t)) : toolRow(a, t));
       else {
         (m.steps || []).forEach(t => toolRow(a, t));
         (m.thinking || []).forEach(t => addThought(a, t));
@@ -1967,7 +2065,6 @@ function newConv(){
   convId = null; viewDraft = "draft-" + Date.now(); clearSuggestion(); setRunning();
   // 設定裡的「新對話預設模型／聯網搜尋」
   if (savedPrefs.default_model && setModel(savedPrefs.default_model)) store.set("model", currentModel());
-  if (savedPrefs.default_search !== undefined && !!savedPrefs.default_search !== searchOn) $("#searchBtn").click();
   $("#list").innerHTML = emptyState(); fillHome();
   $("#side").classList.remove("open"); loadHistory(); rebuildOutline(); $("#input").focus();
 }
@@ -2108,6 +2205,49 @@ async function installComponent(id, onProgress){
   return result;
 }
 const fmtMB = n => (n / 1048576).toFixed(1) + " MB";
+/* ---------- MCP 工具（像 LM Studio：每個伺服器一個開關） ---------- */
+async function paintMcp(){
+  const r = await (await fetch("/api/mcp")).json();
+  const box = $("#mcpList"); box.innerHTML = "";
+  if (!r.servers.length) box.innerHTML = `<div class="meta">還沒有加入任何 MCP 工具（Lumina 內建的工具一直都開著）。</div>`;
+  $("#mcpBtn").textContent = "🔌 工具" + (r.servers.some(m => m.enabled) ? ` · ${r.servers.filter(m => m.enabled).length}` : "");
+  for (const m of r.servers){
+    const row = document.createElement("div"); row.className = "msrv";
+    row.innerHTML = `<b></b><span class="meta"></span><span class="sp"></span><label class="tg"><input type="checkbox"><i></i></label><button title="移除">🗑</button>`;
+    row.querySelector("b").textContent = m.name; row.querySelector(".meta").textContent = m.summary;
+    const cb = row.querySelector("input"); cb.checked = m.enabled;
+    cb.onchange = async () => { await post("/api/mcp/toggle", {name:m.name, enabled:cb.checked}); toast(`${m.name} 已${cb.checked ? "開啟" : "關閉"}（下一則回答開始生效）`); };
+    row.querySelector("button").onclick = async () => { if (!confirm(`移除 MCP 工具「${m.name}」？`)) return; await post("/api/mcp/delete", {name:m.name}); paintMcp(); };
+    box.appendChild(row);
+  }
+  const pre = $("#mcpPresets"); pre.innerHTML = "";
+  for (const [id, p] of Object.entries(r.presets)){
+    if (r.servers.some(s => s.name === id)) continue;
+    const b = document.createElement("button"); b.textContent = "＋ " + p.label;
+    b.onclick = async () => {
+      let path = "";
+      if (p.needs){ path = prompt(`請輸入${p.needs}`) || ""; if (!path) return; }
+      const res = await post("/api/mcp/save", {preset:id, path:path.replace(/^"|"$/g, "")});
+      toast(res.ok ? `✔ 已加入 ${id}` : res.message); paintMcp();
+    };
+    pre.appendChild(b);
+  }
+}
+$("#mcpBtn").onclick = () => { const p = $("#mcpPanel"); p.hidden = !p.hidden; $("#mcpBtn").classList.toggle("on", !p.hidden); if (!p.hidden) paintMcp(); };
+$("#mcpClose").onclick = () => { $("#mcpPanel").hidden = true; $("#mcpBtn").classList.remove("on"); };
+$("#mcpAdd").onclick = async () => {
+  let json = $("#mcpJson").value.trim();
+  if (!json){                                     // 用欄位填的：名稱 + 指令 + 參數
+    const name = $("#mcpName").value.trim(), cmd = $("#mcpCmd").value.trim().replace(/^"|"$/g, "");
+    if (!name || !cmd){ $("#mcpMsg").textContent = "請填名稱和指令，或貼上 mcp.json"; return; }
+    const args = ($("#mcpArgs").value.match(/"[^"]*"|\S+/g) || []).map(x => x.replace(/^"|"$/g, ""));
+    json = JSON.stringify({[name]: {command: cmd, args}});
+  }
+  const res = await post("/api/mcp/save", {json});
+  $("#mcpMsg").textContent = res.ok ? `✔ 已加入：${res.added.join("、")}` : res.message;
+  if (res.ok){ ["#mcpJson", "#mcpName", "#mcpCmd", "#mcpArgs"].forEach(k => $(k).value = ""); paintMcp(); }
+};
+
 async function paintComponents(){
   let list; try { list = await (await fetch("/api/components")).json(); } catch { return; }
   const box = $("#compList"); box.innerHTML = "";
@@ -2140,9 +2280,9 @@ function showComponentCard(a, ev){
   const info = ev.info, names = ev.files.map(f => baseName(f)).join("、");
   const card = document.createElement("div"); card.className = "permcard";
   card.innerHTML = `<div class="ph">📦 需要下載元件</div>
-    <p>${ev.files.length ? `要把 <b class="fname"></b> 轉成 PDF，` : "AI 想讀取 PDF（搜尋、取出文字、看頁面），"}需要先下載 <b>${escapeHtml(info.name)}</b>。</p>
+    <p>${ev.files.length ? `要把 <b class="fname"></b> 轉成 PDF，` : ev.id === "agsdk" ? "要用本地模型回答，" : "AI 想讀取 PDF（搜尋、取出文字、看頁面），"}需要先下載 <b>${escapeHtml(info.name)}</b>。</p>
     <ul><li>用途：${escapeHtml(info.purpose)}</li><li>大小：${escapeHtml(info.size_text)}</li>
-      <li>授權：${escapeHtml(info.license)}（免費、開源）</li><li>來源：${escapeHtml(info.source || "官方發布")}，下載後會核對檢查碼</li>
+      <li>授權：${escapeHtml(info.license)}（免費、開源）</li><li>來源：${escapeHtml(info.source || "官方發布")}${ev.id === "agsdk" ? "，固定版本" : "，下載後會核對檢查碼"}</li>
       <li>只需要下載一次；之後可以在「⚙ 設定 → 元件」移除</li></ul>
     <div class="pbtns"><button class="primary allow">允許下載</button><button class="deny">這次不要</button></div>
     <div class="pprog" hidden><div class="bar"><i></i></div><span class="ptxt">連線中…</span><button class="cancel">取消</button></div>`;
@@ -2162,7 +2302,7 @@ function showComponentCard(a, ev){
     if (!r.ok){ txt.textContent = r.message; card.querySelector(".pbtns").hidden = false; card.querySelector(".allow").textContent = "再試一次"; return; }
     bar.style.width = "100%";
     if (!ev.files.length){          // 讀 PDF 的元件：裝好後請使用者重新回答
-      card.innerHTML = `<div class="ph">✔ 已安裝 ${escapeHtml(info.name)}</div><p class="meta">按這則回答下方的「↻ 重新回答」，AI 就能用它讀 PDF 了。</p>`;
+      card.innerHTML = `<div class="ph">✔ 已安裝 ${escapeHtml(info.name)}</div><p class="meta">按這則回答下方的「↻ 重新回答」，${ev.id === "agsdk" ? "就會改用本地模型回答" : "AI 就能用它讀 PDF 了"}。</p>`;
       return;
     }
     txt.textContent = "安裝完成，正在產生 PDF…";
@@ -2188,6 +2328,7 @@ function toolRow(a, s){
   }
   return r;
 }
+function stopLine(t){ const l = t.left || []; return `完成檢查：還有 ${l.length} 項沒做完（${l.slice(0, 3).join("、")}），繼續處理`; }
 function actRow(a, kind, content, html){
   const act = a.el.querySelector(".act"), list = act.querySelector(".actlist");
   act.hidden = false;

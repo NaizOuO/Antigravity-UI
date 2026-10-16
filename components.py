@@ -60,6 +60,17 @@ COMPONENTS = {
         "extract_all": True,                # 整個 wheel 解開（它本身就是 zip），放進 sys.path 就能用
         "check": "pypdfium2/__init__.py",
     },
+    # 本地模型（Ollama／LM Studio）用：Google 官方的 Antigravity SDK，連同它需要的套件一起裝進元件資料夾
+    "agsdk": {
+        "name": "Antigravity SDK（本地模型）",
+        "purpose": "讓 Lumina 用你電腦上的模型（Ollama、LM Studio，例如 Qwen3）回答和寫程式，不用網路、不用額度",
+        "version": "0.1.22",
+        "pip": "google-antigravity==0.1.22",
+        "size_text": "下載約 90 MB，安裝後約 250 MB",
+        "license": "Apache-2.0",
+        "source": "Python 官方套件庫 PyPI（google-antigravity）",
+        "check": "google/antigravity/__init__.py",
+    },
 }
 
 
@@ -221,6 +232,12 @@ def install(cid, progress=lambda done, total, msg="": None, cancel=None):
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
+        if c.get("pip"):
+            _pip_install(c, work, progress, cancel)
+            dest = folder(cid)
+            shutil.rmtree(dest, ignore_errors=True)
+            work.replace(dest)
+            return
         archive = _download(c, COMPONENTS_DIR / f".{cid}.zip", lambda d, t: progress(d, t, "下載中"), cancel)
         progress(c["size"], c["size"], "解壓縮中")
         with zipfile.ZipFile(archive) as zf:
@@ -245,6 +262,33 @@ def install(cid, progress=lambda done, total, msg="": None, cancel=None):
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
+
+
+def _pip_install(c, target, progress, cancel):
+    """用 pip 把套件（連同依賴）裝進 target；只裝固定版本、只從 PyPI 下載。"""
+    import subprocess
+    import sys
+    free = shutil.disk_usage(COMPONENTS_DIR).free
+    if free < 600 * 1024 * 1024:
+        raise RuntimeError(f"磁碟空間不足：需要約 600 MB，目前只剩 {human(free)}")
+    py = Path(sys.executable)
+    if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
+        py = py.with_name("python.exe")
+    progress(0, 1, "下載並安裝中（約需 1～3 分鐘）")
+    p = subprocess.Popen([str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-input",
+                          "--target", str(target), "--index-url", "https://pypi.org/simple", c["pip"]],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=0x08000000)
+    lines = []
+    for raw in p.stdout:
+        if cancel.is_set():
+            p.kill()
+            raise Cancelled()
+        lines.append(raw.decode("utf-8", "replace").rstrip())
+        if lines[-1].startswith(("Collecting", "Downloading", "Installing")):
+            progress(0, 1, lines[-1][:80])
+    if p.wait():
+        raise RuntimeError("安裝失敗：" + " / ".join(lines[-4:])[-400:])
+    progress(1, 1, "完成")
 
 
 def remove(cid):

@@ -18,6 +18,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
+import urllib.request
 
 import checkpoints
 import command_guard
@@ -67,6 +68,8 @@ DEFAULT_SETTINGS = {
     # 一般
     "send_key": "enter",          # enter：Enter 送出／ctrl_enter：Ctrl+Enter 送出、Enter 換行
     "default_model": "",          # 新對話的預設模型；空字串 = 沿用上次用的
+    "local_url": "http://localhost:11434/v1",   # 本地模型伺服器（Ollama 是 11434，LM Studio 是 1234）
+    "local_models": "qwen3:8b",   # 出現在模型選單的本地模型，用逗號分隔
     "default_search": False,      # 新對話預設開啟聯網搜尋
     # 外觀
     "font_size": "normal",        # small／normal／large
@@ -248,14 +251,87 @@ def hook_command():
             f"http://{HOST}:{PORT}/api/permission/hook")
 
 
+def stop_hook_command():
+    curl = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "curl.exe"
+    return f"{curl} -s -m 20 -X POST -H Content-Type:application/json --data-binary @- http://{HOST}:{PORT}/api/stop/hook"
+
+
+def decide_stop(payload):
+    """agy 的 Stop hook：模型要結束時，任務清單還有沒做完的項目就擋回去一次（同一份清單只擋一次，不會卡死）。"""
+    run = ACTIVE.get(str(payload.get("conversationId") or ""))
+    if not run or not run.get("work_dir") or run.get("role") == "redteam":
+        return {}
+    try:
+        todos = json.loads((Path(run["work_dir"]) / ".agents" / "lumina_todos.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _stop_untested(run)
+    left = [t.get("content", "") for t in todos if isinstance(t, dict) and t.get("status") != "completed"]
+    return _stop_todos(run, todos, left)
+
+
+def _stop_untested(run):
+    """改了程式卻一次都沒執行過：擋回去一次（小模型常常沒跑就寫「已驗證」）。"""
+    if not run.get("edited") or run.get("ran") or run.get("stop_untested"):
+        return {}
+    run["stop_untested"] = True
+    run["emit"]({"event": "stop_check", "left": ["改了程式但這輪沒有實際執行過"]})
+    return {"decision": "continue", "reason":
+            "[完成檢查] 你這輪修改了檔案，但一次都沒有實際執行過程式或測試。用 run_command 實際執行"
+            "（有畫面的用 lumina 的 run_capture），看到真正的輸出再回答；沒執行過的不能寫【已驗證】。"
+            "如果這次的檔案本來就不需要執行（例如只改文件），在回答裡說明，然後結束。"}
+
+
+def _stop_todos(run, todos, left):
+    key = json.dumps(todos, ensure_ascii=False, sort_keys=True)
+    if not left or run.get("stop_key") == key:
+        return _stop_untested(run)
+    run["stop_key"] = key
+    run["emit"]({"event": "stop_check", "left": left[:8]})
+    return {"decision": "continue", "reason":
+            "[完成檢查] 任務清單還有 " + str(len(left)) + " 項沒有完成：" + "；".join(left[:8]) +
+            "。能做的就繼續做完並實際驗證，再用 todo_write 勾掉（寫上 evidence）。"
+            "如果是刻意留給使用者決定、或這次不做的，就用 todo_write 移除或改寫那幾項，並在回答裡說明原因，然後結束。"}
+
+
+MCP_FILE = SETTING_DIR / "mcp_servers.json"     # 使用者自己加的 MCP 伺服器（格式同 Cursor／LM Studio 的 mcp.json）
+MCP_PRESETS = {
+    "naiz-studio": {"label": "Naiz Studio（看影片、轉逐字稿、圖片轉 PDF）", "needs": "Naiz Studio.exe 的完整路徑",
+                    "server": {"command": "{path}", "args": ["--mcp"]}},
+    "rea": {"label": "REA（逆向工程：分析程式、網站、App 怎麼運作）", "needs": "",
+            "server": {"command": "cmd.exe", "args": ["/d", "/c", "npx", "-y", "rea-agents@6.5.0", "mcp"]}},
+}
+
+
+def load_mcp():
+    try:
+        d = json.loads(MCP_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    d.setdefault("mcpServers", {})
+    d.setdefault("disabled", [])
+    return d
+
+
+def save_mcp(d):
+    MCP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MCP_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def user_mcp_servers():
+    """開著的使用者 MCP 伺服器（名稱不能蓋過內建的 lumina）。"""
+    d = load_mcp()
+    return {k: v for k, v in d["mcpServers"].items() if k != "lumina" and k not in d["disabled"] and isinstance(v, dict)}
+
+
 def write_mcp(target, work_dir=None):
-    """在 agy 的工作資料夾寫入 .agents/mcp_config.json：啟動 Lumina 的工具伺服器（讀 PDF、截圖、虛擬環境）。"""
+    """在 agy 的工作資料夾寫入 .agents/mcp_config.json：啟動 Lumina 的工具伺服器（讀 PDF、截圖、虛擬環境），
+    再加上使用者在設定裡打開的其他 MCP 伺服器。"""
     py = Path(sys.executable)
     if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
         py = py.with_name("python.exe")
     roots = [str(Path(target).resolve()), str(UPLOADS), str(OUTPUT)]
     args = [str(ROOT / "tools" / "lumina_mcp.py"), "--roots", ";".join(roots)] + (["--work", str(work_dir)] if work_dir else [])
-    cfg = {"mcpServers": {"lumina": {"command": str(py), "args": args, "env": {"PYTHONUTF8": "1"}}}}
+    cfg = {"mcpServers": {**user_mcp_servers(), "lumina": {"command": str(py), "args": args, "env": {"PYTHONUTF8": "1"}}}}
     p = Path(target) / ".agents" / "mcp_config.json"
     text = json.dumps(cfg, ensure_ascii=False, indent=1)
     try:
@@ -266,12 +342,60 @@ def write_mcp(target, work_dir=None):
         pass
 
 
+REDTEAM_AGENT = """---
+name: redteam
+description: 獨立的找碴測試員。完成一個新程式或一個較大的功能、準備跟使用者說「做好了」之前呼叫它：它從乾淨的狀態（看不到你的思路）只依需求和 SPEC.md 寫測試，專門找出程式在真實使用時會出錯的地方，回報可以重現的問題。小修改不用呼叫。呼叫時把使用者的需求原文和執行方式交給它。
+tools:
+  - view_file
+  - run_command
+  - write_to_file
+  - replace_file_content
+  - search_web
+  - read_url_content
+  - call_mcp_tool
+subagent: true
+mainAgent: false
+model: inherit
+---
+
+# System Prompt
+你是獨立的找碴測試員。另一個 agent 剛在這個工作資料夾寫好程式；你的任務是**找出它在真實使用時會出錯的地方**，不是修它。
+1. 先弄清楚程式該做到什麼（交給你的需求、SPEC.md、README、--help）和怎麼執行。可以讀程式碼找入口，但對錯以需求為準。
+2. 列出真實世界會遇到的情況：亂操作、邊界值、空的或超大的輸入、怪字元和中文路徑、外部資源出錯（檔案被占用、沒權限、網路逾時或限流）、重複執行、做到一半中斷；再列出「不管輸入是什麼都應該成立的性質」。
+3. 實地查證：用到真實網站就讀真實頁面（read_url_content），用到函式庫的關鍵操作就查文件或寫一小段程式實際試它出錯時會怎樣。
+4. 把測試寫在 redteam/ 資料夾（只能寫在這裡，不能改程式本身）：大量隨機輸入打性質、故障注入、從頭到尾實際操作（有畫面的用 lumina 的 run_capture）。需要網站或服務時用本機假伺服器，不連真的網站跑測試。
+5. 實際執行，確認每個失敗是程式的錯而不是測試寫錯。
+6. 最後回覆：找到的問題（每個寫一句說明、重現步驟、應該怎樣、實際怎樣、哪個測試檔），以及重跑全部測試的指令。只放確認過的問題。
+"""
+
+
+AGENT_TEMPLATES = ROOT / "templates" / "agents"     # 跟著程式發布的規則檔和技能（rules/、skills/）
+
+
+def write_agents(target):
+    """在 agy 的工作資料夾放 Lumina 的子代理（找碴）、規則檔和技能。
+    只管 lumina 開頭的檔案和 redteam.md，使用者自己的 AGENTS.md、規則、技能一律不碰。"""
+    files = {Path("agents") / "redteam.md": REDTEAM_AGENT}
+    for f in AGENT_TEMPLATES.rglob("*"):
+        if f.is_file():
+            files[f.relative_to(AGENT_TEMPLATES)] = f.read_text(encoding="utf-8")
+    for rel, text in files.items():
+        p = Path(target) / ".agents" / rel
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if not p.exists() or p.read_text(encoding="utf-8") != text:
+                p.write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+
+
 def write_hooks(target):
     """在 agy 的工作資料夾寫入 hooks.json（每次對話前都重寫，被改掉也會還原）。"""
     d = Path(target) / ".agents"
     d.mkdir(parents=True, exist_ok=True)
     cfg = {"antigravity-ui-guard": {"PreToolUse": [
-        {"matcher": "*", "hooks": [{"type": "command", "command": hook_command(), "timeout": PERM_MAX + 30}]}]}}
+        {"matcher": "*", "hooks": [{"type": "command", "command": hook_command(), "timeout": PERM_MAX + 30}]}],
+        "Stop": [{"type": "command", "command": stop_hook_command(), "timeout": 30}]}}
     text = json.dumps(cfg, ensure_ascii=False, indent=1)
     p = d / "hooks.json"
     try:
@@ -387,6 +511,12 @@ def _decide_tool(payload):
     cid = str(payload.get("conversationId") or "")
     run = ACTIVE.get(cid)
     work = bool(run and run.get("work_dir"))       # 工作模式：專案綁定了資料夾
+    if run:                                        # 給完成檢查用：這輪有沒有改檔案、有沒有實際執行過
+        if tool in PLAN_EDIT_TOOLS:
+            run["edited"] = True
+        if tool == "run_command" or (tool == "call_mcp_tool" and
+                                     str(args.get("ToolName") or "") in ("run_capture", "mutation_check")):
+            run["ran"] = True
     roots = [WORK, OUTPUT, UPLOADS] + ([Path(run["cwd"])] if run else []) + ([Path(run["work_dir"])] if work else [])
     command = str(args.get("CommandLine") or "")
     if tool == "run_command" and lumina_ok(command, str(args.get("Cwd") or ""), roots):
@@ -399,6 +529,25 @@ def _decide_tool(payload):
         log_perm({"tool": tool, "command": command, "cid": cid, "level": "builtin", "decision": "auto_approve",
                   "note": "內建工具"})
         return {"decision": "auto_approve"}
+    # 找碴：只能在 redteam/ 底下寫檔，不能改程式本身（找到問題由原本的對話去修）
+    if run and run.get("role") == "redteam" and tool in PLAN_EDIT_TOOLS:
+        red_dir = Path(run["work_dir"]) / "redteam"
+        if any(not command_guard._inside(f, [red_dir]) for f in command_guard._path_args(args) if Path(f).is_absolute())                 or not command_guard._path_args(args):
+            log_perm({"tool": tool, "command": str(args)[:200], "cid": cid, "level": "redteam", "decision": "deny", "note": "找碴不改程式"})
+            return {"decision": "deny", "reason": f"找碴的工作是找出問題，不能修改程式。測試和報告只能寫在 {red_dir} 底下；"
+                                                  "找到的問題寫進 redteam/report.json，會交回原本的對話去修。"}
+    # 規劃模式：只能寫 .md（SPEC.md 等），不能執行指令或用 Lumina 的執行類工具
+    if run and run.get("plan"):
+        why = None
+        if tool in PLAN_EDIT_TOOLS and any(not str(f).lower().endswith(".md") for f in command_guard._path_args(args)):
+            why = "規劃模式只寫 SPEC.md 這類 Markdown 文件，不寫程式。把要做的內容寫進 SPEC.md，使用者確認後下一輪才實作。"
+        elif tool == "run_command":
+            why = "規劃模式不執行指令。需要的環境資訊已經在開頭的[環境資訊]裡；把技術選擇寫進 SPEC.md 就好。"
+        elif tool == "call_mcp_tool" and str(args.get("ToolName") or "") not in ("design_review", "todo_write"):
+            why = "規劃模式只能用 design_review 和 todo_write。"
+        if why:
+            log_perm({"tool": tool, "command": str(args)[:200], "cid": cid, "level": "plan", "decision": "deny", "note": "規劃模式"})
+            return {"decision": "deny", "reason": why}
     # 讀 agy 工作區以外的檔案：agy 自己會拒絕，而且一拒絕整輪就中斷、沒有回答。
     # 所以在這裡先拒絕並說明原因（模型收到原因會改用其他方法繼續）
     if run and tool != "run_command":
@@ -425,6 +574,8 @@ def _decide_tool(payload):
             return {"decision": "deny", "reason": f"這個 PDF 有 {f.stat().st_size // 1048576} MB，整本讀進來會讓之後每一輪都變慢。"
                                                   "請改用 lumina：pdf-info 看目錄、pdf-find 搜尋、pdf-text 讀指定頁、"
                                                   "pdf-thumbs 找位置、pdf-page 看清楚的頁面。"}
+    if tool.replace("_", "").lower() in ("searchweb", "readurlcontent"):   # 唯讀查資料：agy 預設會問，無頭模式問不了就直接拒絕
+        return {"decision": "auto_approve"}
     if tool == "call_mcp_tool":                # Lumina 的工具伺服器（讀 PDF、截圖、虛擬環境）或其他 MCP 工具
         r = mcp_assess(args, run, work, cid)
         if "decision" in r:
@@ -445,6 +596,7 @@ def _decide_tool(payload):
         return {"decision": decision, **({"reason": reason} if reason else {})}
 
     if a["level"] == "pass":
+        log_perm({**base, "decision": "allow", "note": "交給 agy 預設"})   # 無頭模式下 agy 預設要詢問的會被拒，記下來方便追
         return {"decision": "allow"}
     if a["level"] == "block":
         why = "；".join(a["reasons"])
@@ -518,7 +670,7 @@ def mcp_assess(args, run, work, cid):
         log_perm({"tool": "lumina." + name, "command": str(a.get("file") or ""), "cid": cid, "level": "builtin",
                   "decision": "auto_approve", "note": "內建工具"})
         return {"decision": "auto_approve"}
-    if name in ("todo_write", "design_review", "asset_import"):    # 任務清單、檢查清單：只是記錄或讀說明，不用詢問
+    if name in ("todo_write", "design_review", "asset_import", "mutation_check"):   # mutation_check 只跑已核准的驗收指令    # 任務清單、檢查清單：只是記錄或讀說明，不用詢問
         return {"decision": "auto_approve"} if work else {"decision": "deny", "reason": "todo_write 只能在 Lumina Code 使用。"}
     if name == "acceptance_set":             # 登記後每次回答結束會自動執行，所以要讓使用者看過
         if not work:
@@ -777,13 +929,20 @@ def run_acceptance(work_dir):
                 return False, f"驗收測試 {rel} 在核准後被修改過，介面沒有自動執行。要改測試請重新用 acceptance_set 登記。"
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    p = subprocess.Popen(acc["command"], cwd=work_dir, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         creationflags=NO_WINDOW | 0x00000200,      # 新的程序群組：逾時可以整棵樹一起關
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"})
     try:
-        r = subprocess.run(acc["command"], cwd=work_dir, shell=True, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", creationflags=NO_WINDOW, timeout=600,
-                           env={**os.environ, "PYTHONIOENCODING": "utf-8", "SDL_VIDEODRIVER": "dummy"})
+        out, _ = p.communicate(timeout=600)
     except subprocess.TimeoutExpired:
-        return False, "驗收指令超過 10 分鐘沒有結束（可能在等輸入或開了視窗）。驗收測試要能自己跑完結束。"
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[-2500:]
+        # shell=True 時只關 cmd 會留下卡住的子程式，communicate 就永遠等不完：整個程序樹一起關
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
+        try:
+            p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        return False, "驗收指令超過 10 分鐘沒有結束（可能在等輸入、開了視窗或卡在無限迴圈）。驗收測試要能自己跑完結束。"
+    return p.returncode == 0, out.decode("utf-8", "replace").strip()[-2500:]
 
 
 def error_summary(error):
@@ -933,30 +1092,54 @@ OUTPUT_HINT = ("\n\n[輸出檔案] 如果使用者要你產生檔案（例如 md
                "要產生 PDF 時，.typ 原始檔請存到 {dir}\\" + TYP_SRC + "\\ 資料夾（介面會把 PDF 編譯到 {dir}\\）。"
                "如果用生圖工具產生了圖片，不需要另外複製或搬移檔案（不要用指令），介面會自動取回並顯示。")
 
-WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。程式碼、專案檔案一律建立和修改在這個資料夾裡"
-             "（不是 output）；執行指令時把 Cwd 設成這個資料夾。寫完或改完程式後，一定要實際編譯或執行一次確認沒有錯誤"
-             "（例如 g++ 編譯、python 執行），有錯就修到通過，不要沒驗證就說完成。執行指令前使用者會看到授權卡，請簡短說明用途。"
-             "只修改這個資料夾裡的檔案，不要另外複製一份到 output 或其他地方。"
-             "不要直接執行會一直跑下去（例如時鐘、遊戲迴圈、伺服器）或需要鍵盤輸入的程式：它會卡住、停不下來；"
-             "要確認畫面就加一個執行一次就結束的測試參數（例如 --test），或只編譯並請使用者自己執行。"
-             "能一個指令做完就不要用 ; 串好幾個指令（使用者要逐一確認）。"
-             "有畫面的程式（主控台繪圖、視窗程式）用 run_capture 執行並截圖確認。"
-             "完成的標準：程式編譯或執行沒有錯誤，而且你實際看過執行結果；回答最後用一兩句說明你驗證了什麼、結果如何。"
-             "要做的事有三步以上、或使用者一次提了好幾個問題時，先用 todo_write 列出任務清單，每項驗證過才勾掉。"
-             "修 bug、加功能時，改程式之前先寫驗收測試並用 acceptance_set 登記（做法寫在工具說明裡）。"
-             "驗收測試除了測個別函式，還要實際跑一段完整流程（例如遊戲：模擬按方向鍵幾秒，確認角色真的移動、敵人真的在動、不會卡住）。"
-             "遊戲和有視窗的程式，完成前一定要用 run_capture 的 actions 實際操作（按鍵、等待、截圖），"
-             "逐張比較截圖確認操作有反應；只截開場畫面不算驗證過。"
-             "新做一個程式或加大功能時：開工前先想使用者真正想要的成品是什麼樣子，用 design_review（phase=plan）"
-             "把需求展開成完整規格寫進 todo_write（包含使用者沒說、但這類成品應該要有的東西）；"
-             "說完成之前再用 design_review（phase=review）審查缺了什麼、哪裡設計不好、什麼操作會出事，"
-             "清單上這類成品該有的東西都屬於這次的工作，缺了就補；"
-             "只有明顯超出這個成品的新方向，才寫在回答最後的「建議（尚未執行）」。"
-             "只做使用者要求或明顯必要的事：對外或難以復原的動作（建立 repo、上傳、發布、刪除檔案、安裝大型軟體）"
-             "沒有被要求就不要做，改成建議。"
-             "Python 專案要安裝套件時先 venv_create，再用 venv_install，執行用 .venv\\Scripts\\python。")
+WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。工作守則在 .agents/rules/lumina.md（已載入），"
+             "需要時再讀 lumina-plan、lumina-field-check 規則和 lumina-visual-verify 技能。")
+RESEARCH_HINT = ("\n\n[查資料] 遇到下面這些情況，先用 search_web 上網查（需要時用 read_url_content 讀原始網頁或官方文件），"
+                 "不要憑印象回答：可能已經過時的資訊（版本、價格、新聞、規定）、你不確定的事實、"
+                 "外部網站或服務實際的樣子、函式庫或 API 的實際行為（特別是出錯時會怎樣）。"
+                 "查到的內容在回答最後列出來源網址。一般知識、使用者自己提供的資料就不用查。")
+FIELD_CHECK = ("\n【實地查證】先列出程式依賴的外部東西（網站、API、檔案系統、函式庫的關鍵操作），每一項都實際去看或試一次，"
+               "不要憑印象：網站就讀真實的頁面原始碼（read_url_content），看清楚結構和特殊項目（置頂／置底、廣告、已刪除、分頁）"
+               "並存一份當測試範例；API 和函式庫就查官方文件，特別是「失敗時會怎樣」（檔案被占用、沒權限、逾時、限流）"
+               "，必要時寫一小段程式實際試；把查到的結果和來源寫進 SPEC.md。")
+STYLE_HINT = ("\n\n[排版] 回答用樸素的版面：標題、條列、表格、粗體就夠了。不要在標題、清單項目或句子裡放 emoji 或表情符號"
+              "（像 🌟🎮🚀✅ 這類），也不要用它們當段落記號；需要標示狀態時用文字，例如【已驗證】、【注意】。"
+              "使用者自己要求用 emoji 時才用。")
+REDTEAM_TASK = ("[找碴] 另一段對話已經在這個工作資料夾寫好了程式。你是獨立的測試者，任務是**找出它在真實使用時會出錯的地方**，"
+                "不是幫它修。\n\n使用者當初的需求：\n{request}\n\n{spec}")
+REDTEAM_HINT = ("\n\n[找碴的做法]\n"
+                "1. 先搞清楚程式該做到什麼（需求、SPEC.md、README、--help），以及怎麼執行它。可以讀程式碼找出入口和介面，"
+                "但判斷對錯要以「需求」為準，不是以程式現在的寫法為準。\n"
+                "2. 想清楚這個程式在真實世界會遇到什麼：使用者亂操作、邊界值、空的或超大的輸入、怪字元和中文路徑、"
+                "外部資源出錯（檔案被占用、沒權限、網路逾時或回 429、磁碟滿）、重複執行、執行到一半中斷。"
+                "再列出「不管輸入是什麼都應該成立的性質」，例如資料不會遺失、重新整理後還在、結果不重複、復原後和原本一樣。\n"
+                "3. 把這些寫成可以自己跑完的測試，全部放在 redteam/ 資料夾（只能寫在這裡，不能改程式本身）："
+                "用大量隨機輸入去打性質、模擬外部出錯（故障注入）、從頭到尾實際操作一遍（有畫面的用 run_capture 的 actions）。"
+                "需要網站或服務時用本機的假伺服器，不要連真的網站。\n"
+                "3.5 不要只靠推想：程式用到真實網站就讀真實的頁面（read_url_content），用到函式庫的關鍵操作就查文件"
+                "或實際試它出錯時會怎樣，照真實的樣子設計測試。\n"
+                "4. 實際執行這些測試。對每個失敗，確認是程式的錯而不是測試寫錯（重跑、看輸出）。\n"
+                "5. 最後寫 redteam/report.json："
+                "{\"command\": \"重跑全部找碴測試的指令\", \"failures\": [{\"title\": \"一句話說問題\", "
+                "\"steps\": \"怎麼重現\", \"expected\": \"應該怎樣\", \"actual\": \"實際怎樣\", \"test\": \"redteam/哪個檔\"}], "
+                "\"passed\": [\"測過而且沒問題的項目\"]}。只放確認過的問題，不要猜。\n"
+                "回答時用幾句話總結找到幾個問題、最嚴重的是什麼。")
+REDTEAM_FIX = ("[找碴的結果] 另一個獨立的測試者用 redteam/ 裡的測試檢查了你的程式，找到下面這些問題。"
+               "請逐一修好（修程式，不要改 redteam/ 裡的測試；如果你認為某個測試本身寫錯了，說明理由）。"
+               "修完執行「{command}」確認全部通過，再把它加進驗收（acceptance_set 登記一個同時跑原本驗收和找碴測試的指令）。\n\n{failures}")
+PLAN_HINT = ("\n\n[規劃模式] 使用者開了「先規劃」：這一輪只做規劃，**不要寫程式、不要執行指令**（介面也會擋）。\n"
+             "1. 先想清楚使用者真正想要的成品是什麼樣子，用 design_review（phase=plan，選對 kind，有參考對象就填 reference）展開需求。\n"
+             "1.5" + FIELD_CHECK + "\n"
+             "2. 在工作資料夾寫 SPEC.md，包含：①目標與使用情境 ②功能清單（每項標示「使用者要求」或「補充」）"
+             "③操作方式與畫面／介面 ④技術選擇與理由（優先用成熟的現成套件、引擎，不要自己從頭造輪子）"
+             "⑤檔案結構 ⑥驗收標準：每一項都要能用程式或實際操作檢查，包含「不應該發生」的情況 ⑦這次不做的事。\n"
+             "3. 回答時用幾句話摘要規格，最後列出需要使用者決定的問題（最多 5 個，每個附上你建議的選項）。"
+             "使用者確認或修改後，下一輪才開始實作。")
+PLAN_GO = ("照 SPEC.md 開始實作。先把「驗收標準」寫成驗收測試並用 acceptance_set 登記，再寫程式；"
+           "做完用 design_review（phase=review）對照 SPEC.md 審查，缺的補齊。")
+PLAN_EDIT_TOOLS = ("write_to_file", "replace_file_content", "multi_replace_file_content")
 TOOLS_HINT = ("\n\n[內建工具] 這個介面提供 lumina 工具（pdf_info、pdf_find、pdf_text、pdf_page、pdf_thumbs；Code 區另有 run_capture、"
-              "venv_create、venv_install、todo_write、acceptance_set、design_review、asset_import），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
+              "venv_create、venv_install、todo_write、acceptance_set、design_review、asset_import、mutation_check），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
               "先看對話前文和附件裡有沒有需要的內容，有就不要重查。看不到這些工具時，可以改用終端機指令 "
               "lumina pdf-info \"檔案\"（pdf-find、pdf-text、pdf-page、pdf-thumbs 同理）。")
 
@@ -1009,6 +1192,53 @@ def migrate_shortcut():
         except Exception:
             pass
 SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並在最後列出參考來源網址。]"
+
+
+LOCAL_PREFIX = "local:"
+
+
+def local_group(url):
+    return "LM Studio" if ":1234" in url else "Ollama" if ":11434" in url else "本地模型"
+
+
+def local_models():
+    """本地模型 → 模型選單的項目（id 開頭是 local:）。先問本地伺服器有哪些模型（跟 LM Studio、opencode 一樣自動列出），
+    伺服器沒開就用設定裡手動填的名稱。"""
+    s = load_settings()
+    url = (s.get("local_url") or "http://localhost:11434/v1").rstrip("/")
+    names = []
+    try:
+        with urllib.request.urlopen(url + "/models", timeout=1.5) as r:
+            names = [m["id"] for m in json.loads(r.read()).get("data", []) if isinstance(m, dict) and m.get("id")
+                     and "embed" not in m["id"].lower()]
+    except Exception:
+        pass
+    if not names:
+        names = [n.strip() for n in str(s.get("local_models") or "").replace("，", ",").split(",") if n.strip()]
+    group = local_group(url)
+    return [{"id": LOCAL_PREFIX + n, "name": n, "group": group} for n in names]
+
+
+def local_cmd(prompt, model, cwd, work_dir, cid):
+    """本地模型：改跑 tools/local_backend.py（輸出格式跟 agy 一樣）。prompt 很長，寫進檔案再傳路徑。"""
+    tmp = DATA / "local_prompts"
+    tmp.mkdir(parents=True, exist_ok=True)
+    f = tmp / f"{uuid.uuid4().hex}.txt"
+    f.write_text(prompt, encoding="utf-8")
+    py = Path(sys.executable)
+    if py.name.lower() == "pythonw.exe" and py.with_name("python.exe").exists():
+        py = py.with_name("python.exe")
+    cmd = [str(py), str(ROOT / "tools" / "local_backend.py"), "--prompt-file", str(f),
+           "--model", model[len(LOCAL_PREFIX):], "--base-url", load_settings().get("local_url") or "http://localhost:11434/v1",
+           "--cwd", str(cwd), "--save-dir", str(DATA / "local_conversations"),
+           "--hook-url", f"http://{HOST}:{PORT}/api/permission/hook", "--stop-url", f"http://{HOST}:{PORT}/api/stop/hook",
+           "--add-dir", str(UPLOADS), "--add-dir", str(OUTPUT)]
+    if work_dir:
+        cmd += ["--work", str(work_dir)]
+    if cid:
+        cmd += ["--conversation", cid]
+    env = {**os.environ, "PYTHONPATH": str(components.folder("agsdk")), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    return cmd, env
 
 
 def load_settings():
@@ -1621,6 +1851,38 @@ def hist_path(cid):
     return HISTORY / f"{re.sub(r'[^0-9a-zA-Z-]', '', cid)}.json"
 
 
+_SUMM_CACHE = {}      # 對話紀錄檔 → (修改時間, 大小, 摘要)：列清單時不用每次把幾百個檔案整個讀一遍
+_SUMM_LOCK = threading.Lock()
+
+
+def history_summaries():
+    """所有對話的摘要 [{id, title, model, updated, code, project}]；只重讀有變動的檔案。"""
+    out, seen = [], set()
+    for p in HISTORY.glob("*.json"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        key = str(p)
+        seen.add(key)
+        hit = _SUMM_CACHE.get(key)
+        if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
+            try:
+                h = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            hit = (st.st_mtime_ns, st.st_size, {"id": h.get("id"), "title": h.get("title"), "model": h.get("model"),
+                                               "updated": h.get("updated"), "code": h.get("code") or "",
+                                               "project": h.get("project") or ""})
+            with _SUMM_LOCK:
+                _SUMM_CACHE[key] = hit
+        out.append(hit[2])
+    with _SUMM_LOCK:
+        for k in [k for k in _SUMM_CACHE if k not in seen]:
+            _SUMM_CACHE.pop(k, None)
+    return out
+
+
 def load_hist(cid):
     p = hist_path(cid)
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
@@ -1911,6 +2173,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"exists": (desktop_dir() / SHORTCUT_NAME).exists(),
                                    "prompt": bool(load_settings().get("shortcut_prompt", True))})
         if u.path == "/api/models":
+            locals_ = local_models()
+            send = self.send_json
+            self.send_json = lambda j, *a: send({**j, "models": [{**m, "group": m.get("group") or "Antigravity"}
+                                                                for m in (j.get("models") or [])] + locals_}, *a)
             if not agy_installed():
                 return self.send_json({"models": [], "error": AGY_MISSING})
             if q.get("cached", ["0"])[0] == "1" and last_models():   # 開頁面先用上次的清單，不用等 agy
@@ -1952,6 +2218,13 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError):
                 log = []
             return self.send_json({**load_perms(), "log": log[::-1]})
+        if u.path == "/api/mcp":                    # 設定裡的 MCP 伺服器清單（像 LM Studio：每個都有開關）
+            d = load_mcp()
+            rows = [{"name": k, "enabled": k not in d["disabled"],
+                     "summary": (v.get("url") or " ".join([str(v.get("command", ""))] + [str(x) for x in v.get("args", [])]))[:160]}
+                    for k, v in d["mcpServers"].items() if k != "lumina"]
+            return self.send_json({"servers": rows, "presets": {k: {"label": v["label"], "needs": v["needs"]}
+                                                                for k, v in MCP_PRESETS.items()}})
         if u.path == "/api/usage":
             if q.get("cached", ["0"])[0] == "1":     # 開頁面先顯示上次的數值，不用等 agy
                 try:
@@ -1985,15 +2258,18 @@ class Handler(BaseHTTPRequestHandler):
                                    "transcripts": len(list(conv_dir.glob("*.md"))) if conv_dir.exists() else 0})
         if u.path == "/api/history":
             want = q.get("project", [""])[0]   # 空字串 = 不屬於任何專案的一般對話
+            summ = history_summaries()
+            if q.get("by_code"):               # Code 區：一次回傳所有工作區的工作階段（不用每個工作區各問一次）
+                groups = {}
+                for s in summ:
+                    if s["code"]:
+                        groups.setdefault(s["code"], []).append({k: s[k] for k in ("id", "title", "model", "updated")})
+                for v in groups.values():
+                    v.sort(key=lambda x: x.get("updated") or 0, reverse=True)
+                return self.send_json({"groups": groups})
             code = q.get("code", [""])[0]      # 指定工作區：只列這個工作區的工作階段
-            items = []
-            for p in HISTORY.glob("*.json"):
-                try:
-                    h = json.loads(p.read_text(encoding="utf-8"))
-                    if ((h.get("code") or "") == code) and (code or (h.get("project") or "") == want):
-                        items.append({k: h.get(k) for k in ("id", "title", "model", "updated")})
-                except Exception:
-                    pass
+            items = [{k: s[k] for k in ("id", "title", "model", "updated")} for s in summ
+                     if s["code"] == code and (code or s["project"] == want)]
             items.sort(key=lambda x: x.get("updated") or 0, reverse=True)
             return self.send_json({"items": items})
         if u.path.startswith("/api/history/"):
@@ -2032,6 +2308,11 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self.send_json({"decision": "deny", "reason": "無法讀取工具呼叫"})
             return self.send_json(decide_tool(payload))
+        if u.path == "/api/stop/hook":            # agy 的 Stop hook：模型要結束前的完成檢查
+            try:
+                return self.send_json(decide_stop(self.body()))
+            except Exception:
+                return self.send_json({})
         if u.path == "/api/permission/answer":    # 介面上的授權卡：要帶事件裡的一次性 nonce（模型的指令拿不到）
             d = self.body()
             with PERM_LOCK:
@@ -2089,6 +2370,40 @@ class Handler(BaseHTTPRequestHandler):
                 p["always"].remove(d["remove"])
                 save_perms(p)
             return self.send_json(p)
+        if u.path == "/api/mcp/save":               # 貼上 mcp.json（mcpServers 物件或整份）或用預設範本加入
+            body, d = self.body(), load_mcp()
+            try:
+                if body.get("preset"):
+                    pre = MCP_PRESETS[body["preset"]]
+                    srv = json.loads(json.dumps(pre["server"]).replace("{path}", str(body.get("path", "")).replace("\\", "\\\\")))
+                    if pre["needs"] and not Path(str(body.get("path", ""))).is_file():
+                        return self.send_json({"ok": False, "message": f"找不到檔案：{body.get('path')}"})
+                    new = {body["preset"]: srv}
+                else:
+                    raw = json.loads(body.get("json") or "{}")
+                    new = raw.get("mcpServers", raw)
+                bad = [k for k, v in new.items() if not isinstance(v, dict) or not (v.get("command") or v.get("url"))]
+                if not new or bad:
+                    return self.send_json({"ok": False, "message": "格式不對：每個伺服器要有 command（本機）或 url（遠端）"})
+                if "lumina" in new:
+                    return self.send_json({"ok": False, "message": "lumina 是內建的名稱，請換一個"})
+            except (ValueError, KeyError, AttributeError) as e:
+                return self.send_json({"ok": False, "message": f"讀不懂這段 JSON：{e}"})
+            d["mcpServers"].update(new)
+            d["disabled"] = [x for x in d["disabled"] if x not in new]
+            save_mcp(d)
+            return self.send_json({"ok": True, "added": list(new)})
+        if u.path == "/api/mcp/toggle":
+            body, d = self.body(), load_mcp()
+            name = str(body.get("name", ""))
+            d["disabled"] = [x for x in d["disabled"] if x != name] + ([] if body.get("enabled") else [name])
+            save_mcp(d)
+            return self.send_json({"ok": True})
+        if u.path == "/api/mcp/delete":
+            body, d = self.body(), load_mcp()
+            d["mcpServers"].pop(str(body.get("name", "")), None)
+            save_mcp(d)
+            return self.send_json({"ok": True})
         if u.path == "/api/stop":
             rid = self.body().get("run_id")
             STOPPED.add(rid)
@@ -2330,10 +2645,22 @@ class Handler(BaseHTTPRequestHandler):
     def chat(self, d):
         text, files = d.get("text", ""), d.get("files", [])
         files = [f for f in files if inside(f, ROOT)]
-        model, cid = d.get("model"), d.get("conversation_id")
+        model, cid = d.get("model"), (None if d.get("redteam_for") else d.get("conversation_id"))
         # 舊分頁還選著已下架的模型：直接改用替代模型，不浪費時間重試；沒選模型就用預設，不要交給 agy 自己挑
-        asked, model = model, replacement_model(model, available_ids()) or FALLBACK_MODEL
+        asked, model = model, (model if str(model or "").startswith(LOCAL_PREFIX)        # 本地模型不在 Google 的清單裡
+                               else replacement_model(model, available_ids()) or FALLBACK_MODEL)
         ws = load_ws(d.get("code"))          # Lumina Code 的工作區（和專案互斥）
+        plan = bool(d.get("plan")) and bool(ws)      # 規劃模式：這一輪只寫 SPEC.md，不寫程式
+        # 找碴：開一段新對話，只拿到使用者的需求和 SPEC.md（不帶寫程式時的思路），專門寫測試把程式弄壞
+        red = bool(d.get("redteam_for")) and bool(ws)
+        if red:
+            orig = load_hist(d["redteam_for"]) or {}
+            asks = [m["text"] for m in orig.get("messages", []) if m["role"] == "user" and m.get("text")]
+            text = REDTEAM_TASK.format(request="\n---\n".join(asks[-6:])[:6000] or "（沒有紀錄）",
+                                       spec="工作資料夾裡有 SPEC.md，先讀它。" if (Path(ws_dir(ws)) / "SPEC.md").exists()
+                                       else "這個專案沒有 SPEC.md，從使用者的需求推出程式該做到什麼。")
+            d["conversation_id"], d["fork"] = None, None
+        role = "redteam" if red else ("plan" if plan else "")
         pr = None if ws else load_project(d.get("project"))
         # 重問 / 編輯：fork = {"from": 舊對話 id, "keep": 保留前幾則訊息}
         fork, old, prior = d.get("fork"), None, []
@@ -2355,7 +2682,7 @@ class Handler(BaseHTTPRequestHandler):
         is_new = not cid and not old
         instructions = None
         if not cid:   # 新對話：附上常駐指示（＋專案指示）
-            instructions = load_settings()["instructions"]
+            instructions = load_settings()["instructions"] + STYLE_HINT + RESEARCH_HINT
             if pr and pr.get("instructions", "").strip():
                 instructions += f"\n\n[這個專案的指示]\n{pr['instructions'].strip()}"
             if pr and pr.get("memory", "").strip():
@@ -2366,6 +2693,10 @@ class Handler(BaseHTTPRequestHandler):
                                  f"\n{clip_memory(pr['memory'].strip())}")
             if ws and ws_dir(ws):
                 instructions += env_block(ws)
+            if plan:
+                instructions += PLAN_HINT
+            if red:
+                instructions += REDTEAM_HINT
             mem = lumina_memory(ws) if ws else ""
             if mem:
                 instructions += LUMINA_HINT.format(path=Path(ws_dir(ws)) / LUMINA_MD, content=mem)
@@ -2390,6 +2721,8 @@ class Handler(BaseHTTPRequestHandler):
         # 不傳 --effort：模型 ID 本身已含強度（如 -high），另外加會衝突，Claude 也不支援
         if cid:
             cmd += ["--conversation", cid]
+        local = bool(model and model.startswith(LOCAL_PREFIX))
+        run_env = None
 
         run_id = uuid.uuid4().hex
         started = time.time()                       # 用來找出這輪 Nano Banana 新生成的圖片
@@ -2412,6 +2745,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "params": (su.get("tool_info") or {}).get("parameters")})
             elif ev == "thinking":
                 timeline.append({"k": "think", "text": obj.get("text")})
+            elif ev == "stop_check":
+                timeline.append({"k": "stop", "left": obj.get("left")})
             elif ev == "permission_done":
                 timeline.append({"k": "perm", "command": obj.get("command"), "decision": obj.get("decision"),
                                  "note": obj.get("note")})
@@ -2423,13 +2758,23 @@ class Handler(BaseHTTPRequestHandler):
                     pass
 
         write_hooks(cwd)               # 每次都重寫：模型就算改掉了 hooks.json 也會被還原
+        if work_dir:
+            write_agents(cwd)          # 找碴子代理（模型自己決定什麼時候呼叫）
+            (Path(work_dir) / ".agents" / "lumina_todos.json").unlink(missing_ok=True)   # 任務清單跟工具伺服器一樣每輪重來
         write_mcp(cwd, work_dir)       # Lumina 的工具伺服器（Code 區才帶工作資料夾：截圖、虛擬環境只能在那裡用）
+        if local:                      # 本地模型：改跑 local_backend.py；還沒裝 SDK 就跳出同意卡
+            if not components.installed("agsdk"):
+                emit({"event": "need_component", "id": "agsdk", "info": components.status()["agsdk"], "files": []})
+                emit({"event": "done", "conversation_id": cid, "code": -1,
+                      "error": "要用本地模型，需要先下載 Antigravity SDK。請在上面的卡片按下載，完成後按「↻ 重新回答」。"})
+                return
+            cmd, run_env = local_cmd(prompt, model, cwd, work_dir, cid)
         try:                           # 檢查點：記下模型這輪可以改到的資料夾，改壞了可以復原
             snap = checkpoints.take([work_dir] if work_dir else [cwd, out_dir(pr)])
         except Exception:
             snap = None
         if cid:
-            ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir}
+            ACTIVE[cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir, "plan": plan, "role": role}
         emit({"event": "run", "run_id": run_id})
         if compacting:
             emit({"event": "compacted", "count": len(prior)})
@@ -2440,7 +2785,7 @@ class Handler(BaseHTTPRequestHandler):
         for attempt in range(1, MODEL_RETRIES + 1):
             try:
                 proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                                        stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=run_env)
             except OSError as e:
                 emit({"event": "done", "conversation_id": cid, "code": -1,
                       "error": AGY_MISSING if isinstance(e, FileNotFoundError) else f"無法執行 agy：{e}"})
@@ -2487,7 +2832,8 @@ class Handler(BaseHTTPRequestHandler):
             if ev.get("event") == "init":
                 new_cid = ev.get("conversation_id") or new_cid
                 remember_run(new_cid)
-                ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir}
+                ACTIVE[new_cid] = {"emit": emit, "cwd": str(cwd), "run_id": run_id, "work_dir": work_dir, "plan": plan,
+                                   "role": role}
                 if is_new and new_cid:          # 新對話：馬上出現在左側清單，標題也先用問題產生
                     save_pending(new_cid, {"role": "user", "text": text, "files": files, "t": started},
                                  pr["id"] if pr else None, ws["id"] if ws else None)
@@ -2619,6 +2965,20 @@ class Handler(BaseHTTPRequestHandler):
             if notes:
                 reply = reply.rstrip() + "\n\n" + "\n".join(notes)
                 emit({"event": "pdf", "results": [], "reply": reply})
+        # 找碴跑完：讀它的報告，畫面上出現「交給原本的對話修正」
+        if role == "redteam" and work_dir:
+            try:
+                rep = json.loads((Path(work_dir) / "redteam" / "report.json").read_text(encoding="utf-8"))
+                fails = [f for f in rep.get("failures", []) if isinstance(f, dict)][:20]
+                emit({"event": "redteam_report", "for": d.get("redteam_for"), "count": len(fails),
+                      "command": str(rep.get("command") or ""),
+                      "fix_text": REDTEAM_FIX.format(command=rep.get("command") or "redteam 的測試",
+                                                     failures="\n".join(
+                                                         f"{i}. {f.get('title', '')}\n   重現：{f.get('steps', '')}\n"
+                                                         f"   應該：{f.get('expected', '')}\n   實際：{f.get('actual', '')}\n"
+                                                         f"   測試：{f.get('test', '')}" for i, f in enumerate(fails, 1)))})
+            except (OSError, ValueError):
+                emit({"event": "redteam_report", "for": d.get("redteam_for"), "count": -1})
         # 檢查點：這輪改了哪些檔案（回答下方顯示，可以一鍵復原）
         cp = None
         if snap:
@@ -2668,7 +3028,8 @@ class Handler(BaseHTTPRequestHandler):
         error = "\n".join(raw_other[-20:]) if returncode not in (0, None) else None
         if denied and not reply:          # 例如讀檔被拒：說清楚，而不是只顯示「沒有回覆」
             error = (f"agy 拒絕了需要授權的操作（{'、'.join(denied)}），所以沒有產生回答。"
-                     "非互動模式無法跳出授權視窗；若是讀取附件，請確認介面已更新到最新版，再按「↻ 重新回答」。")
+                     "非互動模式無法跳出授權視窗；若是讀取附件，請確認介面已更新到最新版，再按「↻ 重新回答」。"
+                     "如果一直發生，請回報這個工具名稱：Lumina 需要在 server.py 的 _decide_tool 明確放行或詢問它。")
         model_gone = bool(error) and "invalid model selection" in error
         if model_gone:                    # 選的模型已經不能用（agy 更新後被拿掉）：記下來，介面會重抓清單
             forget_model(model)

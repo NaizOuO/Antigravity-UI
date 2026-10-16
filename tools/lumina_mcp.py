@@ -105,6 +105,15 @@ TOOLS = [
          "command": {"type": "string", "description": "在工作資料夾執行的指令，例如 .venv\\Scripts\\python test_acceptance.py"},
          "covers": {"type": "array", "items": {"type": "string"}, "description": "這支測試檢查了哪些要求（一項一句）"}},
          "required": ["command", "covers"]}},
+    {"name": "mutation_check", "description":
+        "（只有 Lumina Code 能用）檢查驗收測試夠不夠強：自動在程式裡埋入小錯（例如 < 改成 <=、+ 改成 -、數字加 1、刪掉一行），"
+        "每埋一個就跑一次已登記的驗收指令（acceptance_set）。測試沒有失敗的突變＝測試抓不到這種錯，回傳它們的位置。"
+        "驗收測試通過後、說完成之前用一次；對每個存活的突變補一個會讓它失敗的測試，或說明為什麼它其實沒改變行為。"
+        "程式檔一定會被還原，不用擔心。",
+     "inputSchema": {"type": "object", "properties": {
+         "files": {"type": "array", "items": {"type": "string"},
+                   "description": "要埋錯的程式檔（相對路徑）；不填就挑工作資料夾裡主要的 .py／.js（不含測試檔）"},
+         "max_mutants": {"type": "integer", "description": "最多埋幾個（預設 15，上限 40）"}}}},
     {"name": "asset_import", "description":
         "（只有 Lumina Code 能用）把生圖（generate_image）產生的圖片複製進工作資料夾，當遊戲貼圖、介面圖示、背景等素材。"
         "生圖完成後，用它回傳的圖片路徑呼叫這個工具，再從程式載入 assets/ 裡的檔案。"
@@ -119,7 +128,7 @@ TOOLS = [
         "phase=review：說完成之前，對照清單審查成品缺了什麼、哪裡設計不好、什麼操作會出事。",
      "inputSchema": {"type": "object", "properties": {
          "kind": {"type": "string", "enum": ["game", "tool", "web", "cli", "other"],
-                  "description": "game 遊戲；tool 處理檔案或資料的桌面工具；web 網站或網頁應用；cli 命令列程式或作業題；other 其他"},
+                  "description": "game 遊戲；tool 桌面工具；web 網站或網頁應用；cli 命令列程式或作業題；other 其他。會動到使用者檔案、會連網的程式，不管選哪一類，清單都會附上對應的規則"},
          "phase": {"type": "string", "enum": ["plan", "review"]},
          "reference": {"type": "string", "description": "參考的原作或同類產品（例如「Pac-Man」「Notion」），沒有就留空"}},
          "required": ["kind", "phase"]}},
@@ -739,6 +748,10 @@ def t_todo_write(a):
     if sum(t["status"] == "in_progress" for t in clean) > 1:
         raise ToolError("同時只能有一項是 in_progress。")
     TODOS[:] = clean
+    try:                # 給介面的「完成檢查」（Stop hook）讀：還有沒做完的項目就不讓模型直接結束
+        (WORK / ".agents" / "lumina_todos.json").write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
     left = [t for t in clean if t["status"] != "completed"]
     tip = (f"\n\n還有 {len(left)} 項沒完成，繼續做下一項。" if left else
            "\n\n全部完成。回覆使用者前，再對照一次使用者原本的要求：每個症狀都有對應的一項、而且都實際驗證過了嗎？"
@@ -773,6 +786,11 @@ CHECKLISTS = {
     ],
     "tool": [
         "資料安全：寫檔先寫到暫存檔再改名，失敗時原檔不受影響；不會覆蓋使用者的原始檔",
+        "【搬移檔案】同一個磁碟用 os.replace（一步完成）；不要用 shutil.move——跨磁碟或檔案被占用時它會先複製再刪除，"
+        "刪除失敗就留下一份多的副本。每一個檔案的搬移包在 try 裡：失敗就略過並回報，不能讓整個程式中斷；"
+        "搬移前先檢查目的地是否已有同名檔（加編號，不能覆蓋）；要能復原的話，搬一個就記一筆（不是全部搬完才記）",
+        "【一定要測的情況】用驗收測試實際模擬：檔案被其他程式開著（Windows 下 open() 不關就會占用）、唯讀檔、"
+        "同名但內容不同的檔案、路徑有中文和空格、子資料夾、執行兩次、執行到一半出錯；每種情況都要確認檔案數量和內容雜湊前後一致",
         "資源釋放：檔案、執行緒、子程序、大量記憶體用完一定關閉或釋放，連續處理很多檔案後記憶體不會一直漲",
         "中斷與當機：處理到一半取消、關閉視窗、斷電後重開，不會留下壞檔或卡住的暫存檔",
         "極端輸入：空檔案、超大檔案、損壞的檔案、路徑有空格或中文、沒有權限的資料夾",
@@ -802,6 +820,124 @@ CHECKLISTS = {
 }
 
 
+# ---------------------------------------------------------------- 突變測試（參考 Meta ACH、Stryker）
+MUTATIONS = [                                   # (正規表示式, 換成, 說明)；只換一行裡的第一個符合處
+    (r"<=", "<", "<= 改成 <"), (r">=", ">", ">= 改成 >"), (r"(?<![<>=!])<(?![<=])", "<=", "< 改成 <="),
+    (r"(?<![<>=!-])>(?![>=])", ">=", "> 改成 >="), (r"==", "!=", "== 改成 !="), (r"!=", "==", "!= 改成 =="),
+    (r"(?<=\s)\+(?=\s)", "-", "+ 改成 -"), (r"(?<=\s)-(?=\s)", "+", "- 改成 +"),
+    (r"(?<=\s)\*(?=\s)", "/", "* 改成 /"), (r"\bTrue\b", "False", "True 改成 False"), (r"\bFalse\b", "True", "False 改成 True"),
+    (r"\btrue\b", "false", "true 改成 false"), (r"\band\b", "or", "and 改成 or"), (r"&&", "||", "&& 改成 ||"),
+    (r"(?<![\w.])(\d+)(?![\w.])", None, "數字加 1"),
+]
+SKIP_LINE = re.compile(r"^\s*(#|//|import |from |def |class |function |@|\"\"\"|'''|$)")
+
+
+def _mutants(path, text):
+    lines, out = text.split("\n"), []
+    in_doc = False                               # 多行字串／註解（\"\"\"…\"\"\"、/* … */）裡面不是程式，不埋錯
+    for i, line in enumerate(lines):
+        marks = line.count('"""') + line.count("'''") if path.suffix == ".py" else line.count("/*") + line.count("*/")
+        if in_doc or marks:
+            in_doc = in_doc != (marks % 2 == 1)
+            continue
+        code = line.split("#")[0] if path.suffix == ".py" else line.split("//")[0]
+        if SKIP_LINE.match(line) or "print(" in code or "console.log" in code or len(code.strip()) < 4:
+            continue
+        stripped = code
+        for pat, rep, label in MUTATIONS:
+            m = re.search(pat, re.sub(r"(['\"]).*?\1", lambda s: " " * len(s.group(0)), stripped))   # 不改字串裡的內容
+            if not m:
+                continue
+            new = (stripped[:m.start()] + (str(int(m.group(1)) + 1) if rep is None else rep) + stripped[m.end():])
+            out.append((i, label, line, new + line[len(code):]))
+        if re.match(r"^\s*[\w.\[\]]+\s*(\+?=|\()", code) and not code.rstrip().endswith((":", "{", ",", "(")):
+            ind = re.match(r"\s*", line).group(0)
+            out.append((i, "刪掉這一行", line, ind + ("pass" if path.suffix == ".py" else ";")))
+    return out
+
+
+def run_tree(cmd, cwd, timeout, env=None):
+    """執行指令；逾時就把整個程序樹一起關掉（shell=True 時只關 cmd 會留下卡住的子程式）。回傳結束碼，逾時回傳 None。"""
+    p = subprocess.Popen(cmd, cwd=cwd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                         creationflags=0x08000000 | 0x00000200)        # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        return None
+
+
+def t_mutation_check(a):
+    import hashlib
+    import random as _r
+    work = need_work()
+    acc_file = work / ACCEPT_FILE
+    if not acc_file.exists():
+        raise ToolError("還沒有登記驗收指令：先寫好驗收測試並用 acceptance_set 登記，通過之後再用這個工具。")
+    acc = json.loads(acc_file.read_text(encoding="utf-8"))
+    for rel, h in acc["files"].items():
+        if hashlib.sha1((work / rel).read_bytes()).hexdigest() != h:
+            raise ToolError(f"驗收測試 {rel} 在登記後改過了，先重新用 acceptance_set 登記。")
+    tests = {Path(rel).name for rel in acc["files"]}
+    if a.get("files"):
+        files = [need_file(f, [work], [".py", ".js"]) for f in a["files"]]
+    else:
+        files = [p for p in list(work.glob("*.py")) + list(work.glob("*.js")) + list(work.glob("src/**/*.py"))
+                 + list(work.glob("src/**/*.js"))
+                 if p.name not in tests and not p.name.startswith("test") and "min.js" not in p.name][:6]
+    if not files:
+        raise ToolError("找不到可以埋錯的程式檔，用 files 指定。")
+    limit = max(1, min(int(a.get("max_mutants") or 15), 40))
+
+    env = {**__import__("os").environ, "PYTHONIOENCODING": "utf-8", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}
+    limit_s = [180]
+
+    def run_tests():
+        return run_tree(acc["command"], work, limit_s[0], env) == 0   # 逾時（卡住）也算被抓到：行為改變了
+    t_base = time.time()
+    if not run_tests():
+        raise ToolError("驗收測試現在就沒有通過，先修到通過再檢查測試強度。")
+    limit_s[0] = min(180, (time.time() - t_base) * 3 + 10)            # 每個突變最多跑正常時間的 3 倍
+    pool = [(f, *m) for f in files for m in _mutants(f, f.read_bytes().decode("utf-8"))]
+    _r.Random(7).shuffle(pool)
+    pool.sort(key=lambda x: x[2] == "數字加 1")  # 數字的突變排後面（比較常是等價的）
+    chosen, seen_lines = [], set()
+    for x in pool:                                # 每一行最多一個，盡量分散
+        if (x[0], x[1]) not in seen_lines:
+            seen_lines.add((x[0], x[1]))
+            chosen.append(x)
+        if len(chosen) >= limit:
+            break
+    survived, killed, t0 = [], 0, time.time()
+    for f, i, label, old, new in chosen:
+        if time.time() - t0 > 600:
+            break
+        original = f.read_bytes()                  # 用位元組讀寫：還原後和原檔一模一樣（換行符號不會被改）
+        lines = original.decode("utf-8").split("\n")
+        lines[i] = new.rstrip("\r") + ("\r" if lines[i].endswith("\r") else "")
+        try:
+            f.write_bytes("\n".join(lines).encode("utf-8"))
+            ok = run_tests()
+        finally:
+            f.write_bytes(original)                  # 一定還原
+        if ok:
+            survived.append(f"{f.relative_to(work).as_posix()} 第 {i + 1} 行（{label}）：{old.strip()[:80]}  →  {new.strip()[:80]}")
+        else:
+            killed += 1
+    tried = killed + len(survived)
+    head = f"埋了 {tried} 個錯，測試抓到 {killed} 個（{killed / max(1, tried):.0%}）。"
+    if not survived:
+        return head + "\n測試夠強：每個埋入的錯都會讓驗收測試失敗。"
+    return (head + "\n下面這些錯測試抓不到（程式被改壞了，驗收測試卻還是通過）：\n" + "\n".join(f"- {s}" for s in survived) +
+            "\n\n對每一個：補一個會因為這個錯而失敗的測試（想想這一行的用途，以及它錯了在真實使用時會發生什麼事），"
+            "然後用 acceptance_set 重新登記、再跑一次 mutation_check。"
+            "如果某個突變其實不改變任何行為（等價突變），在回答裡說明理由即可。")
+
+
 AGY_BRAIN = Path.home() / ".gemini" / "antigravity-cli" / "brain"
 IMG = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -824,11 +960,54 @@ def t_asset_import(a):
     return f"已存到 {dest.relative_to(work).as_posix()}（{dest.stat().st_size // 1024} KB）。程式裡用這個相對路徑載入。"
 
 
+FILE_RULES = [
+    "同一個磁碟搬檔用 os.replace（一步完成）；不要用 shutil.move——跨磁碟或檔案被占用時它會先複製再刪除，刪除失敗就留下一份多的副本",
+    "每個檔案各自 try：失敗就略過並回報，不能讓整個程式中斷；目的地有同名檔就加編號，絕不覆蓋",
+    "要能復原的話，每處理一個就記一筆（不是全部做完才記），復原時照相反順序做",
+    "驗收測試一定要模擬：檔案被其他程式開著（Windows 下 open() 不關就會占用）、唯讀檔、同名不同內容、中文和空格路徑、"
+    "子資料夾、執行兩次、執行到一半出錯；每種情況都比對前後的檔案數量和內容雜湊",
+]
+NET_RULES = [
+    "先讀 robots.txt，不爬被禁止的路徑；每次請求之間要有間隔（例如 0.5～1 秒），不要並行狂抓",
+    "設定逾時；遇到 429、5xx 要等一下再重試（看 Retry-After，次數有上限），其他錯誤記錄下來繼續，不要整個中斷",
+    "列表頁上的置頂／置底公告、廣告、已刪除的項目要排除；用穩定的 ID（網址、文章代碼）判斷重複，不是用標題",
+    "重複執行要能接續：讀回之前的結果、只補新的；寫檔先寫暫存檔再改名，中途失敗不會弄壞舊檔",
+    "編碼：HTML 實體要還原（&quot; → \"）、CSV 用 utf-8-sig 並交給 csv 模組處理逗號和引號",
+    "驗收測試不要連真的網站：用本機的假伺服器（http.server）模擬分頁、429、公告、刪除文、怪字元",
+]
+
+
+GENERIC = [
+    "使用者明說的每個要求都有對應的功能，而且每項都能用程式或實際操作檢查",
+    "這類成品通常會有、但使用者沒提到的功能（想想真實使用者第一次用會期待什麼），列出來判斷要不要做",
+    "失敗情境分析：這個程式在真實世界會遇到什麼——使用者亂操作、邊界值、空的或超大的輸入、怪字元、"
+    "外部資源出錯（檔案被占用或沒權限、網路逾時或被限流、服務回傳怪資料）、重複執行、做到一半中斷——每一種會怎樣？",
+    "性質：列出不管輸入是什麼都應該永遠成立的事（資料不會遺失或重複、操作後再復原會回到原狀、重新開啟後狀態還在、"
+    "數值守恆、畫面上的東西和內部狀態一致），寫成用大量隨機輸入去打的測試",
+    "從頭到尾像使用者一樣實際操作一遍（有畫面的用 run_capture 的 actions，動作過程用 rec 連拍），不是只測個別函式",
+    "會動到使用者資料或外部世界的操作：先預覽、可以復原、失敗不會留下做一半的狀態",
+]
+
+
+def generic_only():
+    """實驗開關：setting/lumina_flags.json 的 generic_only 為 true 時，清單只給通用的項目（不分領域）。"""
+    try:
+        flags = json.loads((HERE.parent / "setting" / "lumina_flags.json").read_text(encoding="utf-8"))
+        return bool(flags.get("generic_only"))
+    except (OSError, ValueError):
+        return False
+
+
 def t_design_review(a):
     need_work()
     kind = a.get("kind") if a.get("kind") in CHECKLISTS else "other"
     ref = str(a.get("reference") or "").strip()
     items = "\n".join(f"- {x}" for x in CHECKLISTS[kind])
+    if generic_only():
+        items = "\n".join(f"- {x}" for x in GENERIC)
+    elif kind != "game":                        # 依「程式會做什麼」附上的規則（不管長什麼樣子）
+        items += "\n\n【如果會讀寫、搬移、刪除使用者的檔案】\n" + "\n".join(f"- {x}" for x in FILE_RULES)
+        items += "\n\n【如果會連網、呼叫 API 或爬網頁】\n" + "\n".join(f"- {x}" for x in NET_RULES)
     if a.get("phase") == "review":
         return ("設計審查清單" + (f"（參考：{ref}）" if ref else "") + "：\n" + items +
                 "\n\n逐項對照成品（實際操作或執行過再判斷，不要憑印象）。"
@@ -894,7 +1073,8 @@ def call(name, a):
         return t_pdf(name, a)
     return {"run_capture": t_run_capture, "venv_create": t_venv_create, "venv_install": t_venv_install,
             "todo_write": t_todo_write, "acceptance_set": t_acceptance_set, "design_review": t_design_review,
-            "asset_import": t_asset_import}[name](a)
+            "asset_import": t_asset_import,
+            "mutation_check": t_mutation_check}[name](a)
 
 
 # ---------------------------------------------------------------- MCP（JSON-RPC，一行一則）
