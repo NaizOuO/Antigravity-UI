@@ -67,6 +67,7 @@ DEFAULT_SETTINGS = {
     "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
     "bg_scale": 100,              # 自由模式的縮放（%）
     # 一般
+    "chime": True,                # 需要使用者確認（授權卡、下載元件）時響提示音
     "send_key": "enter",          # enter：Enter 送出／ctrl_enter：Ctrl+Enter 送出、Enter 換行
     "default_model": "",          # 新對話的預設模型；空字串 = 沿用上次用的
     "local_url": "http://localhost:11434/v1",   # 本地模型伺服器（Ollama 是 11434，LM Studio 是 1234）

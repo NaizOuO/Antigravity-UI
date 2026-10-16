@@ -565,6 +565,8 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>送出訊息</b><span class="sp"></span>
         <span class="seg" data-key="send_key"><button data-v="enter">Enter 送出</button><button data-v="ctrl_enter">Ctrl+Enter 送出</button></span></div>
       <p class="note">選「Ctrl+Enter 送出」時，Enter 是換行，打長篇推導或貼程式碼不會手滑送出。</p>
+      <div class="srow"><b>需要確認時響提示音</b><span class="sp"></span><input type="checkbox" data-key="chime"></div>
+      <p class="note">模型要執行指令、要下載元件等需要你按確認時，會響一聲；Lumina 在背景時分頁標題也會閃。</p>
       <div class="srow"><b>新對話的預設模型</b><span class="sp"></span><select data-key="default_model" id="defModel"></select></div>
       <p class="note">選「沿用上次用的」時，會記住你最後選的模型。</p>
       <div class="srow"><b>本地模型伺服器</b><span class="sp"></span><input data-key="local_url" class="sinput" style="width:260px"></div>
@@ -2412,6 +2414,7 @@ async function paintComponents(){
   }
 }
 function showComponentCard(a, ev){
+  attention("等你確認");
   const info = ev.info, names = ev.files.map(f => baseName(f)).join("、");
   const card = document.createElement("div"); card.className = "permcard";
   card.innerHTML = `<div class="ph">📦 需要下載元件</div>
@@ -2491,7 +2494,29 @@ function showPermissionNote(a, ev){ if (!ev.asked) actRow(a, "perm", permLine(ev
 // 授權詢問：出現在輸入框上方（像 Claude Code），可以按數字鍵選；決定後時間軸只留一行紀錄
 const PERM_CHOICE = {once:"允許一次", conv:"這段對話都允許", always:"永遠允許", deny:"拒絕", timeout:"沒有回應，已自動拒絕"};
 const permQueue = [];
+// 需要使用者回應（授權、下載元件）時響一聲；頁面在背景時分頁標題也會閃，不然使用者不知道要回來按
+let chimeCtx = null, titleBlink = null;
+function attention(label){
+  if (savedPrefs?.chime !== false) try {
+    chimeCtx = chimeCtx || new AudioContext();
+    const t = chimeCtx.currentTime;
+    [[880, 0], [1320, 0.13]].forEach(([f, d]) => {
+      const o = chimeCtx.createOscillator(), g = chimeCtx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.18, t + d + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.35);
+      o.connect(g).connect(chimeCtx.destination); o.start(t + d); o.stop(t + d + 0.4);
+    });
+  } catch {}
+  if (document.hidden && !titleBlink){
+    const base = document.title; let on = false;
+    titleBlink = setInterval(() => { on = !on; document.title = on ? `【${label}】` : base; }, 900);
+    const stop = () => { if (!document.hidden){ clearInterval(titleBlink); titleBlink = null; document.title = base; document.removeEventListener("visibilitychange", stop); } };
+    document.addEventListener("visibilitychange", stop);
+  }
+}
 function showPermissionCard(a, ev, st){
+  attention("等你確認");
   permQueue.push({a, ev, st});
   if (permQueue.length === 1) openPermDock();
 }
