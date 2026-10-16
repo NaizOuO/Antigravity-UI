@@ -98,6 +98,7 @@ def main():
     ap.add_argument("--keep", default="", help="不能改的東西（介面、檔案）")
     ap.add_argument("--model", default="gemini-3.8-flash-high")
     ap.add_argument("--rounds", type=int, default=2, help="驗收沒過時，交回去再修的最多輪數")
+    ap.add_argument("--cid", help="接著既有的對話做（迭代修正時用，保留前面的脈絡）")
     a = ap.parse_args()
     root = Path(a.dir).resolve()
     task = (Path(a.task_file).read_text(encoding="utf-8") + "\n" if a.task_file else "") + a.task
@@ -110,7 +111,7 @@ def main():
         sys.exit(ws.get("message"))
     before, t0 = snapshot(root), time.time()
     stats = {"asks": 0, "tool_calls": 0, "tokens": 0}
-    rounds, cid, passed, test_out = [], None, None, ""
+    rounds, cid, passed, test_out = [], a.cid, None, ""
     text = prompt
     for i in range(a.rounds + 1):
         print(f"第 {i + 1} 輪…", file=sys.stderr, flush=True)

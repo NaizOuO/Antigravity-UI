@@ -518,7 +518,7 @@ def mcp_assess(args, run, work, cid):
         log_perm({"tool": "lumina." + name, "command": str(a.get("file") or ""), "cid": cid, "level": "builtin",
                   "decision": "auto_approve", "note": "內建工具"})
         return {"decision": "auto_approve"}
-    if name in ("todo_write", "design_review"):    # 任務清單、檢查清單：只是記錄或讀說明，不用詢問
+    if name in ("todo_write", "design_review", "asset_import"):    # 任務清單、檢查清單：只是記錄或讀說明，不用詢問
         return {"decision": "auto_approve"} if work else {"decision": "deny", "reason": "todo_write 只能在 Lumina Code 使用。"}
     if name == "acceptance_set":             # 登記後每次回答結束會自動執行，所以要讓使用者看過
         if not work:
@@ -956,7 +956,7 @@ WORK_HINT = ("\n\n[Lumina Code] 這個工作階段的工作資料夾是 {dir}。
              "沒有被要求就不要做，改成建議。"
              "Python 專案要安裝套件時先 venv_create，再用 venv_install，執行用 .venv\\Scripts\\python。")
 TOOLS_HINT = ("\n\n[內建工具] 這個介面提供 lumina 工具（pdf_info、pdf_find、pdf_text、pdf_page、pdf_thumbs；Code 區另有 run_capture、"
-              "venv_create、venv_install、todo_write、acceptance_set、design_review），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
+              "venv_create、venv_install、todo_write、acceptance_set、design_review、asset_import），用法寫在各工具的說明裡。讀 PDF 一律用它們，不要用 view_file 讀整本、也不要自己寫程式讀；"
               "先看對話前文和附件裡有沒有需要的內容，有就不要重查。看不到這些工具時，可以改用終端機指令 "
               "lumina pdf-info \"檔案\"（pdf-find、pdf-text、pdf-page、pdf-thumbs 同理）。")
 
@@ -2003,6 +2003,10 @@ class Handler(BaseHTTPRequestHandler):
             p = unquote(q.get("p", [""])[0])
             if p and inside(p, ROOT) and Path(p).is_file():
                 return self.send_file(p)
+            # Code 區的工作資料夾（使用者自己加入的）：只開放圖片和 PDF，讓回答裡的生圖、截圖、PDF 看得到
+            if (p and Path(p).suffix.lower() in IMAGE_EXTS + (".pdf",) and Path(p).is_file()
+                    and any(w.get("work_dir") and inside(p, Path(w["work_dir"])) for w in list_ws())):
+                return self.send_file(p)
             if p and inside(p, OUTPUT):             # 輸出檔案被整理到專案資料夾後，舊連結依檔名找
                 hit = next(OUTPUT.rglob(glob.escape(Path(p).name)), None)
                 if hit and hit.is_file():
@@ -2356,7 +2360,10 @@ class Handler(BaseHTTPRequestHandler):
                 instructions += f"\n\n[這個專案的指示]\n{pr['instructions'].strip()}"
             if pr and pr.get("memory", "").strip():
                 instructions += ("\n\n[專案記憶] 以下是之前在這個專案的其他對話中累積的重點（可能不完整，"
-                                 f"和使用者現在說的衝突時以使用者為準）：\n{clip_memory(pr['memory'].strip())}")
+                                 "和使用者現在說的衝突時以使用者為準）。記憶是讓你了解使用者（程度、偏好、背景），"
+                                 "用來調整說明的方式和深淺；產出的回答和文件只寫使用者這次要的主題，"
+                                 "不要把使用者的個人背景（研究方向、實驗室、工作）另外寫成延伸段落或「連結」章節，除非使用者要求。"
+                                 f"\n{clip_memory(pr['memory'].strip())}")
             if ws and ws_dir(ws):
                 instructions += env_block(ws)
             mem = lumina_memory(ws) if ws else ""
@@ -2455,6 +2462,7 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(4 if busy else 2)
 
         reply, steps, new_cid, raw_other, denied = "", [], cid, [], []
+        turn_tok = None                                  # 這一輪用掉的 tokens（存進紀錄，重新開對話時顯示）
         compact_next = False
         think_stop, thoughts = [], []          # 思考過程：讀 agy 紀錄檔的執行緒何時停止、讀到的內容
         if proc is None:                        # 重試用完仍失敗：把 agy 的輸出當成錯誤訊息
@@ -2501,6 +2509,7 @@ class Handler(BaseHTTPRequestHandler):
                 if new_cid and isinstance(u.get("total_tokens"), int):
                     u["turn_tokens"] = turn_tokens(new_cid, u["total_tokens"])
                     compact_next = u["turn_tokens"] > COMPACT_AT
+                turn_tok = u.get("turn_tokens") or u.get("total_tokens") or turn_tok
                 reply = r.get("response") or reply
                 denied = [a.get("display_name") or a.get("action") for a in r.get("denied_actions") or []]
             emit(ev)
@@ -2520,9 +2529,10 @@ class Handler(BaseHTTPRequestHandler):
             # 路徑要編碼：「AI sandbox」這種有空格的路徑會讓 Markdown 的圖片語法斷掉
             shown = "\n\n".join(f"![{p.stem}](file:///{quote(p.as_posix(), safe=':/')})" for p in images)
             names = "、".join(p.name for p in images)
+            where = f"工作資料夾 {Path(work_dir).name}" if work_dir else f" output／{out_dir(pr).name}"
             for p in images:      # 模型自己寫的圖片連結指向 agy 暫存（已經搬走）：拿掉，改用下面正確的
                 reply = re.sub(r"!\[[^\]]*\]\([^)]*" + re.escape(p.stem) + r"[^)]*\)\n?", "", reply)
-            reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到 output／{out_dir(pr).name}：{names}"
+            reply = (reply.rstrip() + "\n\n" if reply.strip() else "") + f"{shown}\n\n🖼 已存到{where}：{names}"
             emit({"event": "images", "paths": [str(p) for p in images], "reply": reply})
         # PDF：這輪 AI 在 output 寫了 .typ → 有 Typst 就編譯；沒有就請介面詢問要不要下載
         typs = new_typ_files(started) if returncode == 0 else []
@@ -2593,6 +2603,8 @@ class Handler(BaseHTTPRequestHandler):
                     emit({"event": "code_fixing", "attempt": attempt + 1, "name": f.name})
                     fix_code(new_cid, cwd, model, f, err, work_dir)
             # 驗收：有登記驗收指令、這輪又改了檔案，就由介面重跑一次（不採信模型自己說通過），沒過交回去修
+            if touched and (Path(work_dir) / ".agents" / "lumina_acceptance.json").exists():
+                emit({"event": "accept_checking"})   # 畫面顯示「重跑驗收中」，不然看起來像已經結束
             acc = run_acceptance(work_dir) if touched else None
             for attempt in (1, 2):
                 if acc is None or acc[0] or "被修改過" in acc[1]:
@@ -2619,7 +2631,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         if new_cid and (reply or steps or old):
             user_msg = {"role": "user", "text": text, "files": files, "t": started}
-            reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps, "t": time.time()}
+            reply_msg = {"role": "assistant", "text": reply or FAILED_REPLY, "steps": steps, "t": time.time(),
+                         "meta": {"model": model, "secs": round(time.time() - started, 1), "tokens": turn_tok}}
             if images:
                 reply_msg["images"] = [str(p) for p in images]
             if cp:

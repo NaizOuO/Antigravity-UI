@@ -22,13 +22,13 @@ if not (folder / prog).exists():
 else:
     checks["有主程式"] = True
     req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-           "params": {"name": "run_capture", "arguments": {"program": prog, "seconds": 15}}}
+           "params": {"name": "run_capture", "arguments": {"program": prog, "actions": ["wait 6", "shot 畫面", "hold w 1.5", "shot 前進後", "wait 6", "shot 15 秒"]}}}
     r = subprocess.run([sys.executable, str(MCP), "--work", str(folder), "--roots", str(folder)],
                        input=json.dumps(req) + "\n", capture_output=True, text=True, encoding="utf-8", timeout=180)
     res = json.loads(r.stdout.strip().splitlines()[-1])["result"]
     text = res["content"][0]["text"]
     crashed = bool(re.search(r"Traceback|Error:|Exception", text))
-    shots = re.findall(r"^([A-Za-z]:\\.+?\.png)", text, re.M)        # 路徑可能有空格（AI sandbox）
+    shots = re.findall(r"([A-Za-z]:\\[^\n]+?\.png)", text)        # 路徑可能有空格（AI sandbox）；網頁版前面有 [名稱]
     checks["啟動 15 秒沒有當掉"] = not crashed and not res.get("isError")
     checks["有畫面（截到視窗）"] = bool(shots)
     if shots:                                   # 截圖複製到題目資料夾，方便使用者看

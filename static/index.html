@@ -387,6 +387,16 @@ body.resizing{cursor:col-resize;user-select:none}
   #toggleSide{display:inline-block}
   #bar{padding:8px 16px}
 }
+/* 圖片、PDF 預覽 */
+#viewer{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.78);display:none;flex-direction:column;align-items:center;padding:12px 2vw}
+#viewer.on{display:flex}
+#viewer .vbar{display:flex;gap:8px;align-items:center;width:100%;max-width:1600px;color:#eee;font-size:13px;margin-bottom:8px}
+#viewer .vbody{flex:1;min-height:0;width:100%;max-width:1600px;display:flex;align-items:center;justify-content:center}
+#viewer .vbar .vt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#viewer .vbar a,#viewer .vbar button{color:#eee;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:3px 10px;font-size:13px;cursor:pointer;text-decoration:none}
+#viewer img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;background:#111}
+#viewer iframe{width:100%;height:100%;border:0;border-radius:8px;background:#525659}
+.bubble img.thumb{cursor:zoom-in}
 </style>
 </head>
 <body>
@@ -891,7 +901,9 @@ async function runTurn(text, files, fork){
         if (ev.event === "log") a.meta.textContent = ev.text.slice(0, 200);
         if (ev.event === "images"){ reply = ev.reply; a.bubble.innerHTML = renderMd(reply); scrollDown(); }
         if (ev.event === "pdf_fixing"){ st.set(`PDF 排版有錯，自動修正中（第 ${ev.attempt} 次）`); }
-        if (ev.event === "code_fixing"){ st.set(`${ev.name} 編譯有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "code_fixing"){ st.set(ev.name === "驗收測試" ? `驗收測試沒通過，自動修正中（第 ${ev.attempt} 次）`
+                                                                    : `${ev.name} 編譯有錯，自動修正中（第 ${ev.attempt} 次）`); }
+        if (ev.event === "accept_checking"){ st.set("回答完成，介面正在重跑驗收測試…"); }
         if (ev.event === "pdf_checking"){ st.set(`模型正在檢查 ${ev.name} 的成品（第 ${ev.attempt} 輪）`); }
         if (ev.event === "pdf"){ reply = ev.reply; pdfFailures = ev.results.filter(r => !r.ok); a.bubble.innerHTML = renderMd(reply); }
         if (ev.event === "need_component"){
@@ -1571,6 +1583,8 @@ async function openConv(id){
       }
       closeAct(a);
       a.bubble.innerHTML = renderMd(m.text);
+      if (m.meta) a.meta.textContent = `${modelLabel(m.meta.model)} · ${m.meta.secs} 秒` +
+                                       (m.meta.tokens ? ` · ${m.meta.tokens.toLocaleString()} tokens` : "");
       if (m.checkpoint) showCheckpoint(a, m.checkpoint);
     }
   }
@@ -2196,5 +2210,36 @@ loadModels(false, true).then(() => { refreshUsage(); loadModels(true); });
 loadProjects().then(() => { if (!convId && $("#empty")) { $("#list").innerHTML = emptyState(); fillHome(); } });
 setArea(area, true); checkShortcut(); $("#input").focus();
 </script>
+<script>
+/* ---------- 圖片、PDF 預覽：點縮圖、生圖、PDF 連結就在介面上打開，不用跳出新分頁 ---------- */
+document.addEventListener("DOMContentLoaded", function(){
+  const v = document.getElementById("viewer"), body = v.querySelector(".vbody");
+  const close = () => { v.classList.remove("on"); body.innerHTML = ""; };
+  function open(url, name, kind){
+    v.querySelector(".vt").textContent = name || "";
+    v.querySelector("a").href = url;
+    body.innerHTML = "";
+    const el = document.createElement(kind === "pdf" ? "iframe" : "img");
+    el.src = url;
+    body.appendChild(el);
+    v.classList.add("on");
+  }
+  window.openViewer = open;
+  v.querySelector(".vclose").onclick = close;
+  v.addEventListener("click", e => { if (e.target === v || e.target === body) close(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && v.classList.contains("on")) close(); });
+  const nameOf = url => { try { return (new URL(url, location.href).searchParams.get("p") || "").split(/[\\/]/).pop(); } catch { return ""; } };
+  document.addEventListener("click", e => {
+    const img = e.target.closest("img.thumb, img.genimg");
+    if (img && !v.contains(img)){ e.preventDefault(); open(img.src, nameOf(img.src), "img"); return; }
+    const a = e.target.closest("a[href*='/api/file?p=']");
+    if (!a || v.contains(a) || e.ctrlKey || e.metaKey) return;
+    const n = nameOf(a.href);
+    if (/\.pdf$/i.test(n)){ e.preventDefault(); open(a.href, n, "pdf"); }
+    else if (/\.(png|jpe?g|gif|webp)$/i.test(n)){ e.preventDefault(); open(a.href, n, "img"); }
+  }, true);
+});
+</script>
+<div id="viewer"><div class="vbar"><span class="vt"></span><a target="_blank">在新分頁開啟</a><button class="vclose">關閉（Esc）</button></div><div class="vbody"></div></div>
 </body>
 </html>

@@ -17,6 +17,7 @@ import ctypes
 import io
 import json
 import re
+import shutil
 import threading
 import subprocess
 import sys
@@ -63,13 +64,21 @@ TOOLS = [
         "都用這個看結果，不要用 run_command 直接執行（會卡住停不下來）。使用者會先看到詢問。"
         "看完截圖後，回答裡一定要具體寫出你檢查了哪些地方、各自是否正確；看到問題就修正後再截一次，不要只說「看起來沒問題」。",
      "inputSchema": {"type": "object", "properties": {
-         "program": {"type": "string", "description": "工作資料夾裡要執行的程式（.exe、.bat、.py），相對路徑或完整路徑"},
+         "program": {"type": "string", "description":
+             "工作資料夾裡要執行的程式（.exe、.bat、.py、.html），相對路徑或完整路徑。"
+             ".html 會用無頭 Edge 開啟（要先 venv_install playwright），actions 另外支援 click x y、drag dx dy（滑鼠，1280×720 座標）；"
+             "網頁遊戲載入完素材後要設 window.__LUMINA_READY__ = true，工具會等到它才開始操作（最多 15 秒）。"
+             "3D 引擎（Ursina、Panda3D、OpenGL）的視窗從外部截圖會是黑的：在遊戲裡加這段，讓工具請遊戲自己截圖——"
+             "每幀檢查環境變數 LUMINA_SHOT_DIR 資料夾裡有沒有 req_N 檔，有就把畫面存成同資料夾的 shot_N.png 再刪掉 req_N"
+             "（Ursina/Panda3D：base.win.saveScreenshot(Filename(路徑))）。沒設 LUMINA_SHOT_DIR 時什麼都不做。"},
          "args": {"type": "array", "items": {"type": "string"}, "description": "傳給程式的參數"},
          "seconds": {"type": "number", "description": "執行多久後截圖（1～15 秒，預設 3）"},
          "utf8": {"type": "boolean", "description": "主控台程式要不要先切成 UTF-8（chcp 65001）。預設 false＝跟使用者平常執行的環境一樣"},
          "actions": {"type": "array", "items": {"type": "string"}, "description":
              "實際操作程式（遊戲、視窗程式）的腳本，一行一個動作，照順序做：「wait 秒數」等待、「shot 名稱」截圖、"
-             "「hold 按鍵 秒數」按住（例如 hold right 1.5、hold up+left 0.5）、「press 按鍵」按一下。"
+             "「hold 按鍵 秒數」按住（例如 hold right 1.5、hold up+left 0.5）、「press 按鍵」按一下、"
+             "「rec 按鍵 秒數 張數」按住的同時連拍（例如 rec k 0.6 6 看翻滾的每個階段；rec none 1 6 不按鍵只連拍）。"
+             "翻滾、揮劍、跳躍這種一秒內的動作，一定要用 rec 逐張看過程，單張截圖看不出姿勢對不對。"
              "按鍵：left right up down space enter esc tab shift ctrl a~z 0~9。"
              "用來確認操作真的有反應：例如 shot 開始 → hold right 1 → shot 往右後，比較兩張截圖角色有沒有移動。"
              "有 actions 時 seconds 不用給（腳本做完就關閉）。"},
@@ -96,6 +105,14 @@ TOOLS = [
          "command": {"type": "string", "description": "在工作資料夾執行的指令，例如 .venv\\Scripts\\python test_acceptance.py"},
          "covers": {"type": "array", "items": {"type": "string"}, "description": "這支測試檢查了哪些要求（一項一句）"}},
          "required": ["command", "covers"]}},
+    {"name": "asset_import", "description":
+        "（只有 Lumina Code 能用）把生圖（generate_image）產生的圖片複製進工作資料夾，當遊戲貼圖、介面圖示、背景等素材。"
+        "生圖完成後，用它回傳的圖片路徑呼叫這個工具，再從程式載入 assets/ 裡的檔案。"
+        "貼圖要做成可以重複鋪的無縫紋理時，生圖時就說明「seamless tileable texture, top-down, no lighting」。",
+     "inputSchema": {"type": "object", "properties": {
+         "source": {"type": "string", "description": "生圖產生的圖片完整路徑"},
+         "name": {"type": "string", "description": "存成的檔名，例如 grass.png（放在 assets/ 下，可以有子資料夾，例如 ui/heart.png）"}},
+         "required": ["source", "name"]}},
     {"name": "design_review", "description":
         "（只有 Lumina Code 能用）拿到這類程式該有的檢查清單。新做一個程式或加大功能時用兩次："
         "phase=plan：開工前，用清單把使用者的話展開成完整規格（使用者沒說、但這類成品應該要有的東西），寫進 todo_write；"
@@ -366,6 +383,13 @@ def parse_actions(lines):
             elif cmd == "press":
                 out.append(("hold", [vk_of(k) for k in parts[1].split("+")], 0.08))
                 total += 0.08
+            elif cmd == "rec":                          # rec 按鍵 秒數 [張數]：按住的同時連拍（看翻滾、揮劍這種瞬間的動作）
+                t = min(float(parts[2]), 5.0)
+                vks = [] if parts[1].lower() == "none" else [vk_of(k) for k in parts[1].split("+")]
+                out.append(("rec", vks, t, max(2, min(int(parts[3]) if len(parts) > 3 else 6, 12))))
+                total += t
+            elif cmd in ("click", "drag"):              # 滑鼠：只有網頁（.html）支援
+                out.append((cmd, float(parts[1]), float(parts[2])))
             else:
                 raise ToolError(f"不認得的動作：{raw}")
         except (IndexError, ValueError):
@@ -373,6 +397,111 @@ def parse_actions(lines):
     if total > 40:
         raise ToolError("操作腳本總長不能超過 40 秒")
     return out
+
+
+def engine_shot(shot_dir, n, out, wait=2.5):
+    """請 3D 遊戲自己截圖：放一個 req_n 檔，遊戲看到後把畫面存成 shot_n.png。等不到就回傳 False。"""
+    req, png = shot_dir / f"req_{n}", shot_dir / f"shot_{n}.png"
+    req.write_text("", encoding="utf-8")
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(0.1)
+        if png.exists() and not req.exists():           # 遊戲存好圖會刪掉 req
+            time.sleep(0.2)
+            shutil.copy(png, out)
+            return True
+    req.unlink(missing_ok=True)
+    return False
+
+
+SHEET_PS = r"""
+Add-Type -AssemblyName System.Drawing
+$items = Get-Content -Raw -Encoding UTF8 $args[0] | ConvertFrom-Json
+$cols = [int]$args[2]; $tw = [int]$args[3]
+$first = [System.Drawing.Image]::FromFile($items[0].path)
+$th = [int]($tw * $first.Height / $first.Width); $first.Dispose()
+$rows = [math]::Ceiling($items.Count / $cols)
+$bmp = New-Object System.Drawing.Bitmap ($cols * $tw), ($rows * $th)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.InterpolationMode = 'HighQualityBicubic'; $g.Clear([System.Drawing.Color]::Black)
+$font = New-Object System.Drawing.Font 'Microsoft JhengHei', 13, ([System.Drawing.FontStyle]::Bold)
+$bg = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(190, 0, 0, 0))
+for ($i = 0; $i -lt $items.Count; $i++) {
+  $x = ($i % $cols) * $tw; $y = [math]::Floor($i / $cols) * $th
+  $im = [System.Drawing.Image]::FromFile($items[$i].path)
+  $g.DrawImage($im, $x, $y, $tw, $th); $im.Dispose()
+  $sz = $g.MeasureString($items[$i].label, $font)
+  $g.FillRectangle($bg, $x, $y, $sz.Width + 8, $sz.Height + 4)
+  $g.DrawString($items[$i].label, $font, [System.Drawing.Brushes]::Yellow, $x + 4, $y + 2)
+}
+$bmp.Save($args[1], [System.Drawing.Imaging.ImageFormat]::Png)
+"""
+REC_LINE = re.compile(r"^\[連拍 (?:\S+ )?(\d+)/(\d+)，([\d.]+)s\] (.+?\.png)")
+
+
+def make_sheet(frames, out, cols=3, tile_w=480):
+    """多張截圖拼成一張帶時間標籤的總覽圖（用 Windows 內建的 System.Drawing，不需要另外裝套件）。"""
+    tmp = SHOTS / f"sheet_{uuid.uuid4().hex[:6]}.json"
+    tmp.write_text(json.dumps([{"path": str(p), "label": lab} for p, lab in frames], ensure_ascii=False), encoding="utf-8")
+    ps = SHOTS / "lumina_sheet.ps1"
+    ps.write_text(SHEET_PS, encoding="utf-8-sig")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps), str(tmp), str(out),
+                        str(cols), str(tile_w)], capture_output=True, timeout=60, creationflags=0x08000000)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return Path(out).exists()
+
+
+def add_sheets(lines):
+    """把連拍的每一組（1/n … n/n）拼成一張總覽圖，放在那一組前面；模型先看總覽圖就好，省得逐張讀。"""
+    out, group = [], []
+
+    def flush():
+        if len(group) >= 2:
+            sheet = SHOTS / f"sheet_{int(time.time() * 1000)}.png"
+            if make_sheet([(p, f"{i}/{n}  {t}s") for i, n, t, p, _ in group], sheet, cols=min(3, len(group))):
+                out.append(f"[連拍總覽（{len(group)} 張，依時間排列）] {sheet}  ← 先看這張")
+        out.extend(raw for *_, raw in group)
+        group.clear()
+    for line in lines:
+        m = REC_LINE.match(line)
+        if m:
+            i, n = int(m.group(1)), int(m.group(2))
+            if i == 1:
+                flush()
+            group.append((i, n, m.group(3), m.group(4), line))
+            if i == n:
+                flush()
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return out
+
+
+def capture_web(work, page, a):
+    """網頁（.html）：用工作資料夾 .venv 裡的 Playwright 開無頭 Edge，照 actions 操作、截圖。"""
+    py = work / ".venv" / "Scripts" / "python.exe"
+    if not py.exists() or subprocess.run([str(py), "-c", "import playwright"], capture_output=True).returncode:
+        raise ToolError("網頁要用 Playwright 操作：先 venv_create，再 venv_install playwright（用電腦上的 Edge，不用另外下載瀏覽器）。")
+    actions = [str(x) for x in (a.get("actions") or ["wait 2", "shot 畫面"])]
+    parse_actions(actions)                              # 只是檢查格式
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([str(py), str(HERE / "lumina_web.py"), str(work), str(page.relative_to(work)), str(SHOTS),
+                        json.dumps(actions, ensure_ascii=False)], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=180, creationflags=0x08000000, env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"})
+    try:
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise ToolError("網頁截圖失敗：" + (r.stderr or r.stdout)[-800:]) from None
+    msg = "網頁操作截圖（無頭 Edge，1280×720）：\n" + ("\n".join(add_sheets(res["shots"])) or "（沒有截圖）")
+    if res["errors"]:
+        msg += "\n⚠ 網頁的 JavaScript 錯誤（一定要修）：\n" + "\n".join(res["errors"])
+    if res["console"]:
+        msg += "\n主控台的錯誤／警告：\n" + "\n".join(res["console"])
+    return msg + ("\n（提醒：逐張用 view_file 打開比較前後差異；判斷「有沒有在動」用程式模擬的數字，截圖只看外觀。"
+                  "回答時寫出每張圖看到了什麼。）")
 
 
 def game_window(wins, tag):
@@ -419,7 +548,9 @@ def _alive(pid):
 
 def t_run_capture(a):
     work = need_work()
-    prog = need_file(a.get("program", ""), [work], [".exe", ".bat", ".cmd", ".py"])
+    prog = need_file(a.get("program", ""), [work], [".exe", ".bat", ".cmd", ".py", ".html"])
+    if prog.suffix.lower() == ".html":
+        return capture_web(work, prog, a)
     args = [str(x) for x in (a.get("args") or [])]
     secs = min(15.0, max(1.0, float(a.get("seconds") or 3)))
     actions = parse_actions(a.get("actions"))
@@ -433,8 +564,12 @@ def t_run_capture(a):
         cmdline = subprocess.list2cmdline([".\\" + rel] + args)
     # 用 conhost 開一個傳統的主控台視窗（不交給 Windows Terminal），標題設成 tag 方便找到這個視窗
     # 隱藏桌面看不到畫面，但聲音照樣會從使用者的喇叭出來：pygame / SDL 的程式一律不出聲
-    inner = (f'title {tag} & set SDL_AUDIODRIVER=dummy' + (" & chcp 65001>nul" if a.get("utf8") else "")
-             + f" & {cmdline}")
+    shot_dir = work / ".agents" / "lumina_shots"         # 3D 引擎的截圖請求（見 run_capture 說明）
+    shutil.rmtree(shot_dir, ignore_errors=True)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    # 用 & 直接相接、不留空格：cmd 會把 & 前的空格算進 set 的值裡
+    inner = "&".join([f"title {tag}", "set SDL_AUDIODRIVER=dummy", f"set LUMINA_SHOT_DIR={shot_dir}"]
+                     + (["chcp 65001>nul"] if a.get("utf8") else []) + [cmdline])
     result = {}
 
     def work_on_hidden_desktop():
@@ -463,6 +598,7 @@ def t_run_capture(a):
                     if len(desktop_windows(hdesk, None, tag)) > 1:
                         break
                 time.sleep(1.0)
+                engine_ok = None                        # 遊戲有沒有截圖鉤子（第一次試過就知道）
                 for act in actions:
                     hw = game_window(desktop_windows(hdesk, None, tag), tag)
                     if act[0] == "wait":
@@ -474,10 +610,35 @@ def t_run_capture(a):
                             time.sleep(0.05)
                             send_keys(hw, act[1], True)
                         send_keys(hw, act[1], False)
+                    elif act[0] == "rec" and hw:
+                        _, vks, rec_secs, n = act
+                        if engine_ok is None:           # 先試一次遊戲有沒有截圖鉤子，連拍時才不會卡住等待
+                            probe = SHOTS / f"probe_{int(time.time() * 1000)}.png"
+                            engine_ok = engine_shot(shot_dir, len(shots) + 900, probe, wait=0.8)
+                        send_keys(hw, vks, True)
+                        t0 = time.time()
+                        for i in range(n):
+                            target = t0 + rec_secs * i / (n - 1)
+                            while time.time() < target:     # 按住期間持續送按鍵
+                                time.sleep(0.03)
+                                send_keys(hw, vks, True)
+                            out = SHOTS / f"play_{prog.stem}_{int(time.time() * 1000)}.png"
+                            if engine_ok is not False and engine_shot(shot_dir, len(shots), out, wait=0.6):
+                                engine_ok = True
+                                shots.append(f"[連拍 {i + 1}/{n}，{time.time() - t0:.2f}s] {out}")
+                            else:
+                                engine_ok = False if engine_ok is None else engine_ok
+                                w, h = grab(hw, out)
+                                shots.append(f"[連拍 {i + 1}/{n}，{time.time() - t0:.2f}s] {out}（{w}×{h}）")
+                        send_keys(hw, vks, False)
                     elif act[0] == "shot" and hw:
                         out = SHOTS / f"play_{prog.stem}_{int(time.time() * 1000)}.png"
-                        w, h = grab(hw, out)
-                        shots.append(f"[{act[1]}] {out}（{w}×{h}）")
+                        got = engine_shot(shot_dir, len(shots), out)
+                        if got:                         # 3D 引擎自己存的畫面（外部截圖抓不到顯示卡畫的內容）
+                            shots.append(f"[{act[1]}] {out}（遊戲自己截的畫面）")
+                        else:
+                            w, h = grab(hw, out)
+                            shots.append(f"[{act[1]}] {out}（{w}×{h}）")
                     if not _alive(pid) and len(desktop_windows(hdesk, None, tag)) <= 1:
                         result["died"] = act[0] + (f" {act[1]}" if act[0] == "shot" else "")
                         break
@@ -503,13 +664,13 @@ def t_run_capture(a):
             for o in owners:
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(o)], capture_output=True, creationflags=0x08000000)
     t = threading.Thread(target=work_on_hidden_desktop)
-    t.start(); t.join(secs + 30 + (sum(x[-1] for x in actions if x[0] != "shot") + 20 if actions else 0))
+    t.start(); t.join(secs + 30 + (sum((x[2] if x[0] == "rec" else x[-1]) for x in actions if x[0] in ("wait", "hold", "rec")) + 20 if actions else 0))
     if "error" in result:
         raise result["error"]
     shots, alive = result.get("shots", []), result.get("alive", False)
     if actions:
         died = result.get("died")
-        return ("操作截圖（照腳本順序）：\n" + ("\n".join(shots) or "（沒有截到遊戲視窗）") +
+        return ("操作截圖（照腳本順序）：\n" + ("\n".join(add_sheets(shots)) or "（沒有截到遊戲視窗）") +
                 (f"\n⚠ 程式在「{died}」之後就結束了（可能當掉），用 run_command 執行看錯誤訊息。" if died else "\n程式已經關閉。") +
                 "\n（提醒：逐張用 view_file 打開，比較前後差異：按了方向鍵角色有沒有移動、敵人有沒有在動、畫面有沒有出錯。"
                 "沒有反應就是 bug，不能說完成；回答時寫出每張圖看到了什麼。）")
@@ -601,6 +762,14 @@ CHECKLISTS = {
         "死亡、過關、遊戲結束這些流程真的會發生。模擬要用遊戲實際的每幀時間（例如 1/60 秒）跑，"
         "另外再用較大的時間（1/30、0.1 秒，模擬卡頓）各跑一次——只用一種時間間隔，常會漏掉只在實際幀率出現的卡住問題。"
         "截圖只用來看外觀，判斷「有沒有在動」一律用模擬的數字",
+        "【3D 角色的方向一定要用座標檢查，看截圖會看不出來】從場景圖取各部件的世界座標計算："
+        "臉（或鼻子、眼睛）減身體中心＝正面方向，和移動方向的夾角 < 10°；盾和左手在角色左側、劍在右側"
+        "（用 正面 × 上方 的外積判斷左右）；揮劍時劍尖往正面掃過去；鎖定時正面朝向目標。"
+        "另外做一個除錯模式（例如按 F1）：在角色腳下畫正面箭頭和 XYZ 座標軸，截圖時開著，才看得出朝向。"
+        "鏡頭也要檢查：W 前進後角色在畫面中變小（往畫面深處走），A/D 讓角色往畫面左／右移",
+        "【3D 角色的部件要有正確的父子關係】頭、四肢、武器都掛在同一個身體節點下；翻滾、倒下、被擊飛這種整體動作，"
+        "轉的是這個共同的父節點（所有部件一起轉），不能只轉身體部件——否則會變成身體在滾、頭還直立。"
+        "用座標檢查：翻滾到一半時，頭的世界高度要明顯低於站立時",
     ],
     "tool": [
         "資料安全：寫檔先寫到暫存檔再改名，失敗時原檔不受影響；不會覆蓋使用者的原始檔",
@@ -631,6 +800,28 @@ CHECKLISTS = {
         "資料與資源：會不會損毀檔案、佔住記憶體或檔案不放",
     ],
 }
+
+
+AGY_BRAIN = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+IMG = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def t_asset_import(a):
+    work = need_work()
+    src = Path(str(a.get("source") or "")).expanduser()
+    if not src.is_absolute() or not inside(src, [AGY_BRAIN.resolve()]):
+        raise ToolError("source 要是生圖產生的圖片路徑（在 agy 的資料夾裡）；工作資料夾裡的檔案直接用就好，不用匯入。")
+    if src.suffix.lower() not in IMG or not src.is_file():
+        raise ToolError(f"找不到圖片：{src}")
+    name = str(a.get("name") or src.name).replace("\\", "/").strip("/")
+    dest = (work / "assets" / name).resolve()
+    if not inside(dest, [work / "assets"]) or ".." in name:
+        raise ToolError("name 只能是 assets/ 底下的檔名")
+    if dest.suffix.lower() not in IMG:
+        dest = dest.with_suffix(src.suffix.lower())
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src, dest)
+    return f"已存到 {dest.relative_to(work).as_posix()}（{dest.stat().st_size // 1024} KB）。程式裡用這個相對路徑載入。"
 
 
 def t_design_review(a):
@@ -702,7 +893,8 @@ def call(name, a):
     if name.startswith("pdf_"):
         return t_pdf(name, a)
     return {"run_capture": t_run_capture, "venv_create": t_venv_create, "venv_install": t_venv_install,
-            "todo_write": t_todo_write, "acceptance_set": t_acceptance_set, "design_review": t_design_review}[name](a)
+            "todo_write": t_todo_write, "acceptance_set": t_acceptance_set, "design_review": t_design_review,
+            "asset_import": t_asset_import}[name](a)
 
 
 # ---------------------------------------------------------------- MCP（JSON-RPC，一行一則）

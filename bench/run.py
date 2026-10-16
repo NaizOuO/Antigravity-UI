@@ -105,6 +105,21 @@ TASKS["pacman"] = {
                "- game.update(dt, direction)：前進 dt 秒，direction 是 (dx, dy) 或 None（不按鍵）\n"
                "- game.score、game.lives、game.pellets_left()、game.over（命用完為 True）"),
 }
+# 時之笛第三輪：真正的 3D 引擎 + 美術 + 分三輪開發（規格書 seeds/zelda3/SPEC.md）
+ZELDA3_ROUNDS = [
+    "第二輪：照 SPEC.md 第 5 節的第 2 輪做（草原、陶笛與時之歌石門、蝙蝠、村落 NPC 對話），"
+    "做完跑第 6 節的驗收數字，並實際操作截圖確認。",
+    "第三輪：照 SPEC.md 第 5 節的第 3 輪做（三段連擊、頭目兩階段、音樂、打擊感、標題、死亡、暫停、結局）。"
+    "最後用 design_review（kind=game, phase=review, reference=薩爾達傳說 時之笛）對照整份 SPEC.md 審查，"
+    "特別是第 1 節美術方向的每一項，缺的補齊；跑第 6 節的驗收數字並實際操作截圖確認。",
+]
+ZELDA3_FIRST = ("照這個資料夾的 SPEC.md 做《時之笛》風格的 3D 遊戲，用{ver}。會分三輪做，這是第一輪："
+                "只做 SPEC.md 第 5 節列的第 1 輪內容，美術照第 1 節的數值做。"
+                "做完跑第 6 節的驗收數字，並用 run_capture 的 actions 實際操作截圖確認手感和畫面。")
+TASKS["zelda3_py"] = {"seed": "seeds/zelda3", "verify": "verify/launch.py", "followups": ZELDA3_ROUNDS,
+                      "prompt": ZELDA3_FIRST.format(ver="版本 A（Python + Ursina）")}
+TASKS["zelda3_web"] = {"seed": "seeds/zelda3", "verify": "verify/launch.py", "verify_args": ["index.html"],
+                       "followups": ZELDA3_ROUNDS, "prompt": ZELDA3_FIRST.format(ver="版本 B（網頁 + Three.js）")}
 # 協作：Claude 寫規格書（SPEC.md）和驗收測試，Lumina 實作
 TASKS["pacman_spec"] = {
     "seed": "seeds/pacman_spec", "verify": "verify/pacman.py", "verify_args": ["spec"], "launch": True,
@@ -173,25 +188,36 @@ def run_one(name, model, note, tag=""):
     say = lambda m: print(f"[{folder.name}] {m}", flush=True)
     say(f"題目 {name}｜{model}")
 
-    t0, asks, tokens, cid, err, tools = time.time(), 0, None, None, None, 0
-    try:
-        for line in post("/api/chat", {"text": task["prompt"], "model": model, "code": ws["id"]}):
-            e = json.loads(line)
-            ev = e.get("event")
-            su = e.get("step_update") or {}
-            if su.get("step_type") == "tool" and su.get("state") == "ACTIVE":
-                tools += 1
-            if ev == "permission":
-                asks += 1
-                choice = "conv" if e.get("can_conv") else "once"
-                say(f"[{time.time() - t0:4.0f}s] 詢問 {asks}：{e['command'][:100]}")
-                post("/api/permission/answer", {"id": e["id"], "nonce": e["nonce"], "choice": choice}).read()
-            if ev == "result":
-                tokens = (e["result"].get("usage") or {}).get("turn_tokens")
-            if ev == "done":
-                cid, err = e.get("conversation_id"), e.get("error")
-    except Exception as e:                 # 連線斷掉之類：照樣評分，記下錯誤
-        err = f"{type(e).__name__}: {e}"
+    t0, asks, tokens, cid, err, tools = time.time(), 0, 0, None, None, 0
+    # 多輪題目：同一段對話依序交代（模擬真人一輪一輪調整），前一輪出錯就停
+    for n, text in enumerate([task["prompt"]] + task.get("followups", [])):
+        if n:
+            say(f"[{time.time() - t0:4.0f}s] 第 {n + 1} 輪")
+        try:
+            body = {"text": text, "model": model, "code": ws["id"], **({"conversation_id": cid} if cid else {})}
+            for line in post("/api/chat", body):
+                e = json.loads(line)
+                ev = e.get("event")
+                su = e.get("step_update") or {}
+                if su.get("step_type") == "tool" and su.get("state") == "ACTIVE":
+                    tools += 1
+                if ev == "permission":
+                    asks += 1
+                    choice = "conv" if e.get("can_conv") else "once"
+                    say(f"[{time.time() - t0:4.0f}s] 詢問 {asks}：{e['command'][:100]}")
+                    post("/api/permission/answer", {"id": e["id"], "nonce": e["nonce"], "choice": choice}).read()
+                if ev == "result":
+                    tokens += (e["result"].get("usage") or {}).get("turn_tokens") or 0
+                    say(f"[{time.time() - t0:4.0f}s] 回答出現（agy 結束）")
+                if ev in ("accept_checking", "code_fixing", "pdf"):
+                    say(f"[{time.time() - t0:4.0f}s] 回答後處理：{ev} {e.get('name', '')}")
+                if ev == "done":
+                    cid, err = e.get("conversation_id") or cid, e.get("error")
+                    say(f"[{time.time() - t0:4.0f}s] 這一輪結束")
+        except Exception as e:             # 連線斷掉之類：照樣評分，記下錯誤
+            err = f"{type(e).__name__}: {e}"
+        if err:
+            break
     secs = round(time.time() - t0)
 
     # 用題目自己的驗證程式檢查（跑在題目資料夾的 .venv 裡）
